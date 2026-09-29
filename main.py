@@ -27,7 +27,7 @@ import config
 
 app = FastAPI()
 log = logging.getLogger("voice_feedback")
-MAX_AUDIO_BYTES = 8_000_000
+MAX_AUDIO_BYTES = 4_000_000
 AUDIO_BUCKET = os.getenv("AUDIO_BUCKET", "audio")
 IS_TEST = os.getenv("IS_TEST", "true").lower() == "true"
 last_transcription_error = None
