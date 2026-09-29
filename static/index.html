@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10144b">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml"><title>Your voice, our next spark · NASA Space Apps Cairo</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="site-shell">
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="NASA Space Apps Cairo home"><span class="orbit" aria-hidden="true">✦</span><span>NASA SPACE APPS<span class="brand-city">CAIRO / 2026</span></span></a>
+      <span class="header-label">THE PARTICIPANT VOICE</span>
+    </header>
+    <main class="feedback-layout">
+      <section class="story" aria-labelledby="headline">
+        <p class="eyebrow"><span class="tiny-spark" aria-hidden="true">✦</span> ONE SPARK. INFINITE IMPACT.</p>
+        <h1 id="headline">Your voice.<br>Our next <em>spark.</em></h1>
+        <p class="intro">You made the experience. Now help shape what comes next. Share a moment, an idea, or something we can do better.</p>
+        <figure class="event-art"><img src="/event-artwork.png" alt="NASA Space Apps Cairo: One Spark, Infinite Impact. An astronaut against a blue cosmic background and an orange spark. November 13–14, 2026." width="3217" height="1303"><figcaption>CAIRO, EGYPT <span>13–14 NOVEMBER 2026</span></figcaption></figure>
+      </section>
+      <section class="feedback-card" aria-labelledby="question">
+        <div class="card-top"><span class="eyebrow">A MOMENT FOR YOUR VOICE</span><span class="test-badge" id="test-badge" hidden>TEST MODE</span></div>
+        <div id="form-panel">
+          <div class="name-field"><label for="participant-name">Your name</label><input id="participant-name" type="text" name="participant_name" autocomplete="name" placeholder="Enter your name" maxlength="120" required dir="auto" aria-describedby="name-help"><p class="muted" id="name-help">Your name will be shared with the organizing team alongside your feedback.</p></div>
+          <p class="question-count" id="progress">PARTICIPANT FEEDBACK</p>
+          <h2 id="question">What was the most valuable part of the event for you?</h2>
+          <p class="muted">No scores. Just your experience, in your own words.</p>
+          <p class="language-note">English, Arabic, or a mix — all welcome.</p>
+          <div class="recorder" id="recorder">
+            <div class="recorder-top"><span id="record-state">READY WHEN YOU ARE</span><span id="timer">00:00 / 01:30</span></div>
+            <div class="record-center"><div class="wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><button type="button" class="mic" id="record" disabled aria-label="Start recording"><svg id="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><span id="stop-icon" hidden aria-hidden="true"></span></button><div class="wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+            <p class="record-label" id="record-label">Tap to start recording</p>
+            <p class="record-help">Up to 90 seconds. Take your time.</p>
+          </div>
+          <div id="preview" class="preview" hidden><label for="playback">Listen before you send</label><audio id="playback" controls preload="metadata"></audio><button id="redo" class="text-button" type="button">Discard & record again</button></div>
+          <label class="consent"><input id="consent" type="checkbox"><span>I agree to share my name and recording with the Cairo organizing team. Audio is stored in Supabase and sent to <span id="provider-name">the selected transcription provider</span> for transcription to help improve the event.</span></label>
+          <p class="privacy-note" id="gemini-notice" hidden>Google’s free tier may use submissions to improve its products. Please avoid names and personal details in test recordings.</p>
+          <button class="primary" type="button" id="send" disabled><span>Send my feedback</span><span aria-hidden="true">↗</span></button>
+          <p class="privacy-note">Your recording is only uploaded when you press Send.</p>
+        </div>
+        <div id="success" class="success" hidden tabindex="-1"><div class="success-spark" aria-hidden="true">✦</div><p class="eyebrow">MESSAGE RECEIVED</p><h2>One voice.<br>Infinite possibilities.</h2><p>Thank you for being part of NASA Space Apps Cairo. Your feedback is safely with the organizing team.</p><button id="next" class="primary" hidden>Next question →</button><p class="receipt" id="receipt"></p></div>
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+        <details class="mic-help"><summary>Need help with your microphone?</summary><p>Allow microphone access when your browser asks. If you blocked it, open the site permissions beside the address bar, allow the microphone, and reload. Also check your device's microphone privacy settings.</p><p>On a laptop, use <strong>http://localhost:8000</strong>. On a phone, open the deployed <strong>HTTPS</strong> link directly in Safari or Chrome. A laptop's plain HTTP network address will not enable the microphone on your phone.</p></details>
+      </section>
+    </main>
+    <footer><span>BUILT BY A COMMUNITY. SHAPED BY YOU.</span><span>NASA SPACE APPS CAIRO · 2026</span></footer>
+  </div>
+</body>
+</html>
