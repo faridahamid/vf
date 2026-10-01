@@ -24,17 +24,20 @@ from google import genai
 from google.genai import types
 from supabase import create_client
 import config
+from contextlib import contextmanager
 
 app = FastAPI()
 log = logging.getLogger("voice_feedback")
 MAX_AUDIO_BYTES = 4_000_000
 AUDIO_BUCKET = os.getenv("AUDIO_BUCKET", "audio")
-IS_TEST = os.getenv("IS_TEST", "true").lower() == "true"
+IS_TEST = os.getenv("IS_TEST", "false").lower() == "true"
 last_transcription_error = None
 hits = defaultdict(list)
 lock = threading.Lock()
+submission_locks = [threading.Lock() for _ in range(256)]
+SUBMISSIONS_PER_IP_HOUR = int(os.getenv("SUBMISSIONS_PER_IP_HOUR", "1000"))
 FORMATS = {"audio/webm": "webm", "audio/mp4": "mp4", "audio/ogg": "ogg", "audio/wav": "wav", "audio/mpeg": "mp3"}
-FIELDS = "id,created_at,participant_name,question_id,ptype,lang,transcript,transcript_raw,audio_path,model,is_test"
+FIELDS = "id,created_at,participant_name,question_id,ptype,lang,rating,transcript,transcript_raw,audio_path,model,is_test"
 
 
 def setting(name):
@@ -132,71 +135,124 @@ async def privacy_headers(request, call_next):
     response.headers["Permissions-Policy"] = "microphone=(self)"
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
+    else:
+        response.headers["Cache-Control"] = "no-cache"
     return response
+
+
+@app.get("/healthz")
+def health():
+    return {"status": "ok"}
 
 
 @app.get("/api/config")
 def cfg():
-    return {"questions": config.QUESTIONS, "is_test": IS_TEST, "max_seconds": 90,
+    return {"questions": config.QUESTIONS, "is_test": IS_TEST, "max_seconds": 90, "max_audio_bytes": MAX_AUDIO_BYTES,
             "transcription_provider": "Google Gemini" if config.PROVIDER == "gemini" else "OpenAI",
             "gemini_test_notice": config.PROVIDER == "gemini" and IS_TEST}
+
+
+@contextmanager
+def response_lock(rid):
+    # Serialize retries/deletes for one response without serializing all participants.
+    with submission_locks[UUID(str(rid)).int % len(submission_locks)]:
+        yield
 
 
 @app.post("/api/answer")
 def answer(request: Request, token: str = Form(...), question_id: str = Form(...),
            submission_id: UUID = Form(...), participant_name: str = Form(...),
-           consent: bool = Form(False),
-           audio: UploadFile = File(...)):
+           rating: int | None = Form(None), consent: bool = Form(False),
+           audio: UploadFile | None = File(None)):
     if not secrets.compare_digest(token, setting("EVENT_TOKEN")):
         raise HTTPException(403, "This event link is invalid. Ask the organizer for the full feedback link.")
     if not consent:
-        raise HTTPException(400, "Please agree to submit your recording.")
-    if question_id not in {q["id"] for q in config.QUESTIONS}:
-        raise HTTPException(400, "Unknown question.")
+        raise HTTPException(400, "Please agree to share your feedback.")
+    question = next((q for q in config.QUESTIONS if q["id"] == question_id), None)
+    if not question and question_id in config.LEGACY_QUESTIONS:
+        question = {"id": question_id, "en": config.LEGACY_QUESTIONS[question_id]}
+    if not question:
+        raise HTTPException(400, "Unknown question. Refresh the page and try again.")
+    if question.get("rating") and rating is None:
+        raise HTTPException(400, "Please choose a rating from 1 to 5.")
+    if rating is not None and not 1 <= rating <= 5:
+        raise HTTPException(400, "Please choose a rating from 1 to 5.")
     participant_name = participant_name.strip()
     if not participant_name or len(participant_name) > 120:
         raise HTTPException(400, "Please enter a name between 1 and 120 characters.")
-    limit(request.client.host if request.client else "unknown")
-    data = audio.file.read(MAX_AUDIO_BYTES + 1)
-    if not data:
-        raise HTTPException(400, "Your recording is empty. Please record again.")
-    if len(data) > MAX_AUDIO_BYTES:
-        raise HTTPException(413, "Recording is too large. Please record a shorter answer.")
-    ctype = (audio.content_type or "").split(";")[0].lower()
-    if ctype not in FORMATS:
-        raise HTTPException(415, "Unsupported audio format. Try Chrome, Edge, or Safari.")
-    sb = database()
+    limit(request.client.host if request.client else "unknown", SUBMISSIONS_PER_IP_HOUR)
+    data, ctype, path = None, None, None
     rid = str(submission_id)
-    path = f"{question_id}/{rid}.{FORMATS[ctype]}"
-    try:
-        existing = sb.table("responses").select("id,transcript,participant_name").eq("id", rid).execute().data
-        if existing:
-            return {"id": rid, "saved": True, "transcript_available": bool(existing[0]["transcript"])}
-        # Stable ID and path allow safe retries after a lost response.
-        sb.storage.from_(AUDIO_BUCKET).upload(path, data, {"content-type": ctype, "upsert": "true"})
-    except Exception:
-        log.error("Audio upload/database lookup failed; check Supabase configuration.")
-        raise HTTPException(502, "Could not store your recording. It is still here; please try sending again.")
-    transcript, model = "", None
-    try:
-        transcript, model = transcribe_audio(data, ctype, "mixed")
-        global last_transcription_error
-        last_transcription_error = None
-    except Exception as error:
-        # Preserve the recording even if either provider rejects or limits a request.
-        last_transcription_error = transcription_error(error)
-        log.warning("Transcription unavailable: %s", last_transcription_error)
-    try:
-        sb.table("responses").upsert({
-            "id": rid, "participant_name": participant_name, "question_id": question_id, "ptype": "participant", "lang": "auto",
-            "transcript": transcript, "transcript_raw": transcript, "audio_path": path,
-            "model": model, "edit_key": secrets.token_urlsafe(24), "is_test": IS_TEST
-        }, on_conflict="id", ignore_duplicates=True).execute()
-    except Exception:
-        log.error("Response insert failed; audio remains at its stable storage path.")
-        raise HTTPException(502, "Your recording could not be registered. Please try sending again.")
-    return {"id": rid, "saved": True, "transcript_available": bool(transcript)}
+    if audio is not None:
+        data = audio.file.read(MAX_AUDIO_BYTES + 1)
+        if not data:
+            raise HTTPException(400, "Your recording is empty. Remove it or record again.")
+        if len(data) > MAX_AUDIO_BYTES:
+            raise HTTPException(413, "Recording is too large. Please record a shorter answer.")
+        ctype = (audio.content_type or "").split(";")[0].lower()
+        if ctype not in FORMATS:
+            raise HTTPException(415, "Unsupported audio format. Try Chrome, Edge, or Safari.")
+        path = f"{question_id}/{rid}.{FORMATS[ctype]}"
+    sb = database()
+    with response_lock(rid):
+        try:
+            existing = sb.table("responses").select("id,transcript,audio_path").eq("id", rid).execute().data
+            if existing:
+                return {"id": rid, "saved": True, "audio_saved": bool(existing[0].get("audio_path")), "transcript_available": bool(existing[0]["transcript"])}
+            if data is not None:
+                sb.storage.from_(AUDIO_BUCKET).upload(path, data, {"content-type": ctype, "upsert": "true"})
+            # Persist feedback before the slow provider call, so restarts or quota errors
+            # cannot lose the rating, name, or reference to the original audio.
+            sb.table("responses").upsert({
+                "id": rid, "participant_name": participant_name, "question_id": question_id,
+                "ptype": "participant", "lang": "auto" if data is not None else None, "rating": rating,
+                "transcript": "", "transcript_raw": "", "audio_path": path,
+                "model": None, "edit_key": secrets.token_urlsafe(24), "is_test": IS_TEST
+            }, on_conflict="id", ignore_duplicates=True).execute()
+        except Exception:
+            log.error("Feedback storage failed; retry keeps the same submission ID.")
+            raise HTTPException(502, "Could not save your feedback. Please try sending again.")
+    transcript = ""
+    if data is not None:
+        try:
+            transcript, model = transcribe_audio(data, ctype, "mixed")
+            # Update, never upsert: an admin deletion during transcription stays deleted.
+            with response_lock(rid):
+                updated = sb.table("responses").update({"transcript": transcript, "transcript_raw": transcript, "model": model}).eq("id", rid).execute().data
+                if not updated:
+                    raise HTTPException(410, "This feedback was removed by an organizer.")
+            global last_transcription_error
+            last_transcription_error = None
+        except HTTPException as error:
+            if error.status_code == 410:
+                raise
+            transcript = ""
+            last_transcription_error = transcription_error(error)
+        except Exception as error:
+            transcript = ""
+            last_transcription_error = transcription_error(error)
+            log.warning("Transcription unavailable: %s", last_transcription_error)
+    return {"id": rid, "saved": True, "audio_saved": data is not None, "transcript_available": bool(transcript)}
 
+
+@app.delete("/api/admin/responses/{rid}")
+def delete_response(rid: UUID, request: Request, x_admin_password: str = Header(None)):
+    limit("admin:" + (request.client.host if request.client else "unknown"), 1000)
+    check_admin(x_admin_password)
+    sb = database()
+    with response_lock(rid):
+        try:
+            rows = sb.table("responses").select("id,audio_path").eq("id", str(rid)).execute().data
+            if not rows:
+                return {"deleted": True}
+            if rows[0].get("audio_path"):
+                # Keep the row if storage deletion fails, so the operation can be retried.
+                sb.storage.from_(AUDIO_BUCKET).remove([rows[0]["audio_path"]])
+            sb.table("responses").delete().eq("id", str(rid)).execute()
+        except Exception:
+            log.error("Feedback deletion incomplete; retry the same response ID.")
+            raise HTTPException(502, "Deletion could not finish. Reload and try again; the entry is kept until storage removal succeeds.")
+    return {"deleted": True}
 
 
 @app.get("/api/admin/status")
@@ -240,14 +296,14 @@ def safe_cell(value):
 
 
 @app.get("/api/admin/export")
-def export(request: Request, x_admin_password: str = Header(None), include_tests: bool = False):
+def export(request: Request, x_admin_password: str = Header(None), include_tests: bool = True):
     limit("export:" + (request.client.host if request.client else "unknown"), 60)
     check_admin(x_admin_password)
-    columns = ["id", "created_at", "participant_name", "question_id", "question", "ptype", "lang", "transcript", "transcript_raw", "audio_path", "model", "is_test"]
+    columns = ["id", "created_at", "participant_name", "question_id", "question", "ptype", "lang", "rating", "transcript", "transcript_raw", "audio_path", "model", "is_test"]
     output = io.StringIO(newline="")
     writer = csv.writer(output)
     writer.writerow(columns)
-    questions = {q["id"]: q["en"] for q in config.QUESTIONS}
+    questions = {**config.LEGACY_QUESTIONS, **{q["id"]: q["en"] for q in config.QUESTIONS}}
     try:
         offset = 0
         while True:

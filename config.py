@@ -1,8 +1,11 @@
 import os
 
 QUESTIONS = [
-    {"id": "q1", "en": "What was the most valuable part of the event for you?"},
+    {"id": "experience", "en": "How was your experience at NASA Space Apps Cairo?", "rating": True},
 ]
+# Keep old responses and already-open participant pages compatible during deployment.
+LEGACY_QUESTIONS = {"q1": "What was the most valuable part of the event for you?"}
+
 VOCAB = "NASA Space Apps Cairo, hackathon, mentor, workshop, judges, IEEE Young Professionals Egypt, One Spark Infinite Impact"
 PROMPT = (
     "Transcribe faithfully in the original language, without translating. "
