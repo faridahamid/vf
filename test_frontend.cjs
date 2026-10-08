@@ -25,15 +25,16 @@ async function createPage(options = {}) {
   }
   const ctx = {
     document:{hidden:false,getElementById:element,querySelector:()=>element("brand"),querySelectorAll:()=>ratings,addEventListener(){}},
-    window:{isSecureContext: options.secure !== false, MediaRecorder:Recorder, addEventListener(){}},
+    window:{confirm:()=>false,isSecureContext: options.secure !== false, MediaRecorder:Recorder, addEventListener(){}},
     navigator:{mediaDevices:{getUserMedia: async () => {if(options.denied)throw {name:'NotAllowedError'};return {getTracks:()=>[track]};}}},
     MediaRecorder:Recorder, URLSearchParams, URL:{createObjectURL:()=> 'blob:test',revokeObjectURL(){}},
-    Blob, FormData, crypto:{randomUUID}, Date:{now:()=>now}, DOMException,
+    AbortController, setTimeout, clearTimeout, Blob, FormData, crypto:{randomUUID}, Date:{now:()=>now}, DOMException,
     location:{search:options.noToken ? '' : '?t=test-token'},
     sessionStorage:{getItem:()=>options.storedToken || '',setItem(){}},
     setInterval(){return 1;}, clearInterval(){}, queueMicrotask,
     fetch:async (url, init) => {
       if (url === '/api/config') return {ok:true,json:async()=>({questions:[{id:'q1',en:'What was valuable?'}], max_seconds:90,is_test:true})};
+      if (url === '/api/transcribe') return options.transcribe ? options.transcribe() : {ok:true,json:async()=>({transcript:'Generated transcript'})};
       requests.push(init.body);
       if(options.send) return options.send(requests.length);
       return {ok:true,json:async()=>({saved:true,id:'test-id',transcript_available:true})};
@@ -67,7 +68,7 @@ test('failed send retains audio and stable submission ID for retry',async()=>{
   await page.record();
   await page.click('send');assert.equal(page.element('preview').hidden,false);assert.equal(page.element('send').disabled,false);
   await page.click('send');assert.equal(page.requests[0].get('submission_id'),page.requests[1].get('submission_id'));
-  assert.equal(page.requests[0].get('audio').type,'audio/mp4');assert.match(page.element('status').textContent,/audio are saved/);
+  assert.equal(page.requests[0].has('audio'),false);assert.equal(page.requests[0].get('feedback_text'),'Generated transcript');
 });
 test('discard creates a fresh recording with no upload',async()=>{
   const page=await createPage();await page.record();await page.click('redo');
@@ -103,4 +104,34 @@ test('event code survives home navigation without a URL token',async()=>{
   assert.equal(page.element('record').disabled,false);
   assert.equal(page.element('brand').href,'/?t=remembered-event');
   await page.click('send');assert.equal(page.requests[0].get('token'),'remembered-event');
+});
+
+test('edited transcript is submitted without audio and cleared on success',async()=>{
+ const page=await createPage();await page.record();
+ assert.equal(page.element('feedback-text').value,'Generated transcript');
+ page.element('feedback-text').value='Corrected Arabic and English';await page.click('send');
+ assert.equal(page.requests[0].get('feedback_text'),'Corrected Arabic and English');
+ assert.equal(page.requests[0].has('audio'),false);
+ assert.equal(page.element('feedback-text').value,'');
+});
+test('failed transcription allows typing and preserves local playback',async()=>{
+ const page=await createPage({transcribe:async()=>({ok:false,json:async()=>({detail:'Failure'})})});await page.record();
+ assert.equal(page.element('preview').hidden,false);assert.equal(page.element('send').disabled,true);
+ page.element('feedback-text').value='Typed answer';page.element('feedback-text').handlers.input();
+ await page.click('send');assert.equal(page.requests[0].get('feedback_text'),'Typed answer');
+});
+
+test('transcription in flight blocks editing and sending',async()=>{
+ let finish;const response=new Promise(resolve=>finish=resolve);
+ const page=await createPage({transcribe:()=>response});await page.record();
+ assert.equal(page.element('feedback-text').disabled,true);assert.equal(page.element('send').disabled,true);
+ await page.click('send');assert.equal(page.requests.length,0);
+ finish({ok:true,json:async()=>({transcript:'Ready to review'})});await tick();
+ assert.equal(page.element('feedback-text').disabled,false);
+ assert.equal(page.element('feedback-text').value,'Ready to review');
+});
+test('recording preserves existing typed text and replacement can be declined',async()=>{
+ const page=await createPage();page.element('feedback-text').value='My original answer';await page.record();
+ assert.equal(page.element('feedback-text').value,'My original answer');
+ await page.click('transcribe');assert.equal(page.element('feedback-text').value,'My original answer');
 });

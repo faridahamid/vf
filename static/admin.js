@@ -25,7 +25,7 @@ function draw() {
     const recording = cell(row, '');
     if (item.audio_url) {
       const audio = document.createElement('audio'); audio.controls = true; audio.preload = 'none'; audio.src = item.audio_url; recording.append(audio);
-    } else { recording.textContent = item.audio_path ? 'Playback unavailable. Reload or check Supabase Storage.' : 'No recording'; }
+    } else { recording.textContent = item.audio_path ? 'Playback unavailable. Reload or check Supabase Storage.' : 'No audio stored'; }
     const actions = cell(row, '');
     const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'delete-button'; remove.textContent = 'Delete';
     remove.addEventListener('click', () => deleteFeedback(item)); actions.append(remove);
@@ -80,7 +80,7 @@ async function deleteFeedback(item) {
     const result = await response.json();
     if (!response.ok || !result.deleted) throw new Error(result.detail || 'Deletion failed. Please try again.');
     data = data.filter(row => row.id !== item.id); offset = data.length;
-    draw(); message('Feedback and its audio file were deleted.');
+    draw(); message(item.audio_path ? 'Feedback and its audio file were deleted.' : 'Feedback was deleted.');
   } catch (error) { message(error.message || 'Deletion failed. Reload to check the result before retrying.'); }
   finally { busy = false; buttons(); }
 }

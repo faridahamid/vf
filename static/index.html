@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#10144b">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml"><title>Your voice, our next spark · NASA Space Apps Cairo</title>
-  <link rel="stylesheet" href="/styles.css?v=ratings-2">
-  <script src="/app.js?v=ratings-2" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=review-1">
+  <script src="/app.js?v=review-1" defer></script>
 </head>
 <body>
   <div class="site-shell">
@@ -36,7 +36,7 @@
           </div></fieldset>
           <div id="voice-panel">
           <div class="voice-heading"><h3>Record your experience</h3><span>Optional</span></div>
-          <p class="muted">Have more to share? Leave a voice note, or simply send your rating.</p>
+          <p class="muted">Record to create an editable transcript, type below, or simply send your rating.</p>
           <p class="language-note">English, Arabic, or a mix — all welcome.</p>
           <div class="recorder" id="recorder">
             <div class="recorder-top"><span id="record-state">READY WHEN YOU ARE</span><span id="timer">00:00 / 01:30</span></div>
@@ -44,12 +44,13 @@
             <p class="record-label" id="record-label">Tap to start recording</p>
             <p class="record-help">Up to 90 seconds. Take your time.</p>
           </div>
-          <div id="preview" class="preview" hidden><label for="playback">Listen before you send</label><audio id="playback" controls preload="metadata"></audio><button id="redo" class="text-button" type="button">Discard & record again</button></div>
+          <div id="preview" class="preview" hidden><label for="playback">Listen before you send</label><audio id="playback" controls preload="metadata"></audio><button id="transcribe" class="text-button" type="button">Create transcript</button><button id="redo" class="text-button" type="button">Discard recording</button></div>
           </div>
-          <p class="submission-notice">By pressing Send, you share your name, rating, and any recording with the organizing team. Recordings are transcribed using <span id="provider-name">the selected transcription provider</span>.</p>
+          <div class="text-feedback"><label for="feedback-text">Your feedback <span class="muted">(optional)</span></label><textarea id="feedback-text" rows="5" maxlength="10000" dir="auto" placeholder="Type here, or review and edit your transcript…" aria-describedby="review-help"></textarea><p id="review-help" class="muted">Check the wording before sending. Only this final text is shared with the organizing team.</p></div>
+          <p class="submission-notice">Recording is sent to <span id="provider-name">the selected transcription provider</span> to create text. Audio is not saved in Supabase. Send shares your name, rating, and final text.</p>
           <p class="privacy-note" id="gemini-notice" hidden>Google’s free tier may use submissions to improve its products. Please avoid names and personal details in test recordings.</p>
           <button class="primary" type="button" id="send" disabled><span>Send my feedback</span><span aria-hidden="true">↗</span></button>
-          <p class="privacy-note">Your recording is only uploaded when you press Send.</p>
+          <p class="privacy-note">Your recording stays available in this tab for review and is cleared after successful submission.</p>
         </div>
         <div id="success" class="success" hidden tabindex="-1"><div class="success-spark" aria-hidden="true">✦</div><p class="eyebrow">MESSAGE RECEIVED</p><h2>One voice.<br>Infinite possibilities.</h2><p>Thank you for being part of NASA Space Apps Cairo. Your feedback is safely with the organizing team.</p><button id="next" class="primary" hidden>Next question →</button><p class="receipt" id="receipt"></p></div>
         <p id="status" class="status" role="status" aria-live="polite"></p>

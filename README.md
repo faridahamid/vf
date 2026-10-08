@@ -1,83 +1,48 @@
 # NASA Space Apps Cairo — project guide
 
-This document explains the current application, how feedback moves through it, and how to test and publish updates. It contains no passwords, API keys, or event access codes.
+## Participant flow
 
-## 1. What participants do
+Enter a name and rating (1–5). Optionally record up to 90 seconds in English, Arabic, or both, or type feedback directly. After recording, the app creates a transcript automatically when the text field is empty. Review and edit the wording, listen to the local recording if needed, then press Send. Existing typed text is preserved; Create transcript asks before replacing it.
 
-1. Open the event link or scan its QR code.
-2. Enter their name.
-3. Answer **“How was your experience at NASA Space Apps Cairo?”** with a rating from 1 to 5.
-4. Optionally record up to 90 seconds. The recorder is always visible. English, Arabic, and mixed speech are supported without a language selector.
-5. Press **Send my feedback**. The notice above Send explains what is shared; there is no consent checkbox.
+Only name and rating are required. If transcription fails, retry, type your feedback, or discard the recording and send your rating. Discarding audio preserves text; clear the text as well if you want rating-only feedback. The text limit is 10,000 characters.
 
-Only the name and rating are required. Recording is optional. Participants can listen to or discard their recording before sending. Recording stays in browser memory until Send is pressed; it is not a saved draft and can be lost when the page closes or reloads.
+## Where everything goes
 
-The interface is English. The transcription instructions preserve the original spoken language instead of translating it. Transcripts can contain mistakes, so organizers should listen to the audio when wording matters.
+- Vercel serves the website and FastAPI backend; GitHub stores source code.
+- `/api/transcribe` sends temporary audio to the configured provider and returns text. It never writes to Supabase.
+- `/api/answer` receives only name, rating, final text and request metadata. It stores the final text in `public.responses.transcript`.
+- New rows have null `audio_path` and `model`, and empty `transcript_raw`. IDs, timestamps and existing question metadata remain for administration.
+- No new audio is saved in Supabase. Old audio remains in the private `Audio` bucket until explicitly deleted.
 
-## 2. Where the website runs
+Audio remains in browser memory for review and is cleared along with text after confirmed submission. Refreshing or closing the page can lose these drafts. A failed Send preserves the draft and submission ID for retry. Server multipart handling may temporarily spool uploaded files; the transcription endpoint closes them after processing. Audio still passes through the backend and provider, so this is not a promise of zero provider retention. Transcription consumes provider quota even when the participant never submits.
 
-| Component | Purpose | Location |
-| --- | --- | --- |
-| HTML, CSS, JavaScript and artwork | Participant and admin interfaces | GitHub source, served through Vercel |
-| FastAPI backend | Validate submissions, save feedback, call transcription, protect admin actions | Vercel |
-| Supabase database | Names, ratings, timestamps, transcripts and audio references | `public.responses` table |
-| Supabase Storage | Original audio files | Private bucket named `Audio` in this setup |
-| OpenAI | Convert optional audio into text | Selected transcription provider; default model `gpt-4o-transcribe` |
+## Admin, export and deletion
 
-Production website: https://vf-ten-virid.vercel.app/
+Production: https://vf-ten-virid.vercel.app/ (use the full event-token link).
 
-Organizer dashboard: https://vf-ten-virid.vercel.app/admin
+Admin: https://vf-ten-virid.vercel.app/admin
 
-Participants should receive the full event link with `?t=YOUR_EVENT_TOKEN`. The actual code is deliberately omitted here.
+Admin displays final text in the Transcript column. New responses show No audio stored. Older recordings still play through temporary signed links valid for one hour. Reload to refresh expired playback links; keep the bucket private.
 
-## 3. What happens when someone presses Send
+CSV export includes all responses, not just loaded pages. Open it in Excel; import as UTF-8 if Arabic appears incorrectly. Final text is in `transcript`; audio is not embedded. Only older responses have audio paths. Names, ratings, timestamps and metadata remain available.
 
-For rating-only feedback, the browser sends the name, rating, question ID and unique submission ID to `/api/answer`. The server validates the event code and fields, then saves a database row. It does not call OpenAI.
+Delete removes the database row. For older audio responses, it deletes the audio first, then the row. Failed audio removal keeps the row for retry. There is no restore button; downloaded exports, backups and provider-retained data are outside this deletion. This update deletes no existing feedback.
 
-For feedback with a recording:
+## Deployment and testing
 
-1. The browser sends the same fields plus the audio to the backend.
-2. The backend uploads the audio to the private Supabase bucket.
-3. It saves the database row, including the audio path, before requesting transcription.
-4. It sends the audio to the configured transcription provider.
-5. When transcription succeeds, it updates the saved row with the transcript and model name.
+No database migration is needed. Commit and push to the GitHub branch connected to Vercel Production, then wait for Ready. A local commit alone does not publish. Keep existing Vercel environment settings; local `.env` changes do not update them.
 
-Audio paths look like `experience/<submission-UUID>.webm`. The extension can differ by browser, such as `.mp4` on some devices. The path is an object identifier inside the bucket, not a public download link.
+Old already-open pages that send audio to `/api/answer` receive a refresh error instead of storing audio. Ask participants to reload after deployment.
 
-If transcription fails after storage succeeds, the feedback and audio remain available. Admin can still listen to the recording. Failed or interrupted transcription is not automatically retried in the current app. A storage failure is reported as a failed submission; the participant can retry while the page remains open. Upload and database insert are separate operations, so an interrupted storage operation can leave an audio object without a completed database row.
+Test name/rating only, typed feedback, recording then correcting the transcript, failed transcription followed by typing, and retrying a failed submission. In admin and CSV, verify that the final edited wording appears and no new audio path exists. Local tests use the Supabase project configured in `.env`; production credentials mean real production data.
 
-## 4. Where to find feedback and audio
+The new regression suite checks validation, temporary transcription without database/storage writes, legacy-upload rejection, retries, 40 concurrent simulated final submissions, old audio deletion, and frontend editing/error behavior. These mocked tests do not prove live event capacity or real microphone compatibility.
 
-### In the app
+## Limits
 
-Open `/admin` and enter the configured admin password. Load responses to see participant names, ratings, transcripts and recordings. Older voice-only feedback may have no rating. Rating-only submissions have no audio or transcript.
+The browser limits recordings to 90 seconds; the backend caps uploads at 4 MB. Text uses much less storage than audio, but existing audio still occupies space. Transcription remains synchronous and subject to hosting timeouts and provider quotas; there is no background retry queue.
 
-### In Supabase
-
-- **Table Editor → responses:** saved feedback records.
-- **Storage → Audio:** original audio objects, organized by question ID.
-- Use the row's `audio_path` to identify its recording.
-
-The bucket should remain private. The backend uses its server-side Supabase service key to access it. Admin playback uses temporary signed links valid for one hour; reload the dashboard to obtain a fresh link after expiry. Anyone holding an unexpired signed link can use it, so treat it as private.
-
-Participant recordings are not stored in GitHub. Vercel runs the application but Supabase is the persistent feedback store.
-
-## 5. Exporting to Excel
-
-Use the CSV export button in `/admin`, then open the downloaded `space-apps-feedback.csv` in Excel. It includes all responses returned by the export query, including pages not loaded in the dashboard. The current admin export includes older test entries too.
-
-The export includes IDs, timestamps, participant names, question details, ratings, transcripts, audio paths, model names and legacy metadata. Audio files are not embedded in the spreadsheet. Use admin playback or Supabase Storage to access them.
-
-If Excel displays Arabic incorrectly, import the file through **Data → From Text/CSV** and select UTF-8 encoding. Timestamps are stored with timezone information; convert them to Cairo time if needed for reporting.
-
-## 6. Deleting feedback
-
-The admin Delete button asks for confirmation. The server removes the audio object first and then deletes the response row, including the transcript. Rating-only deletion removes the row.
-
-If audio removal fails, the row is kept so the operation can be retried. If the database deletion fails after audio removal, the row can temporarily remain without playable audio; retry deletion.
-
-Deletion removes active app data. It cannot erase downloaded spreadsheets, downloaded recordings, external backups, or copies retained by a transcription provider. There is no restore button in this app. Test deletion only on a disposable test response.
-
+Transcription requests are limited to 120 per IP per hour per server process. Participants sharing Wi-Fi may share that limit; it is not distributed abuse prevention. Test expected peak traffic before a large event. A saved transcription preview is not created: until Send succeeds, no feedback row exists.
 
 ## 8. The event token
 

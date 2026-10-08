@@ -9,6 +9,7 @@ const homeLink = document.querySelector('.brand');
 if (token && homeLink) homeLink.href = '/?t=' + encodeURIComponent(token);
 let questions = [], index = 0, recorder = null, stream = null, chunks = [];
 let recording = null, playbackURL = null, timer = null, started = 0, submissionID = null;
+let transcribing = false;
 let busy = false, requesting = false, ready = false, maxSeconds = 90, recordFailed = false, rating = 0, micReady = false, maxAudioBytes = 4_000_000;
 const ratingInputs = [...document.querySelectorAll('input[name="rating"]')];
 const formatTime = seconds => `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
@@ -18,15 +19,18 @@ function status(message = '', error = false) {
 }
 function sync() {
   const active = recorder?.state === 'recording';
-  $('record').disabled = !ready || !micReady || busy || requesting || Boolean(recording);
+  $('record').disabled = !ready || !micReady || busy || transcribing || Boolean(submissionID) || requesting || Boolean(recording);
   $('record').setAttribute('aria-label', active ? 'Stop recording' : 'Start recording');
   $('recorder').classList.toggle('recording', active);
   $('mic-icon').hidden = active;
   $('stop-icon').hidden = !active;
   $('participant-name').disabled = busy || Boolean(submissionID);
   ratingInputs.forEach(input => input.disabled = busy || Boolean(submissionID));
-  $('redo').disabled = busy || Boolean(submissionID);
-  $('send').disabled = !ready || !rating || !$('participant-name').value.trim() || busy || active || requesting;
+  $('redo').disabled = busy || transcribing || Boolean(submissionID);
+  $('feedback-text').disabled = busy || transcribing || Boolean(submissionID);
+  $('transcribe').disabled = !recording || busy || transcribing || Boolean(submissionID);
+  $('transcribe').textContent = transcribing ? 'Transcribing…' : 'Create transcript';
+  $('send').disabled = !ready || !rating || !$('participant-name').value.trim() || busy || transcribing || active || requesting || (Boolean(recording) && !$('feedback-text').value.trim());
   $('send').firstElementChild.textContent = busy ? 'Sending your feedback…' : 'Send my feedback';
 }
 function releaseMic() {
@@ -39,7 +43,7 @@ function clearRecording() {
   $('playback').removeAttribute('src');
   $('playback').load();
   if (playbackURL) URL.revokeObjectURL(playbackURL);
-  recording = null; playbackURL = null; submissionID = null;
+  recording = null; playbackURL = null; submissionID = null; chunks = []; recorder = null;
   $('preview').hidden = true;
   $('record-state').textContent = 'READY WHEN YOU ARE';
   $('record-label').textContent = 'Tap to start recording';
@@ -65,7 +69,7 @@ async function toggleRecording() {
     recorder.stop();
     return;
   }
-  if (busy || requesting || recording) return;
+  if (!ready || !micReady || busy || transcribing || submissionID || requesting || recording) return;
   if (!$('participant-name').value.trim()) {
     status('Please enter your name before recording.', true);
     $('participant-name').focus(); return;
@@ -98,9 +102,10 @@ async function toggleRecording() {
       $('playback').src = playbackURL;
       $('preview').hidden = false;
       $('record-state').textContent = 'RECORDING READY';
-      $('record-label').textContent = 'Your voice, ready to send';
+      $('record-label').textContent = 'Your recording is ready';
       $('timer').textContent = `${formatTime(elapsed)} / ${formatTime(maxSeconds)}`;
-      status('Listen to your recording, then send it when you’re happy.'); sync();
+      status('Review and edit your transcript before sending.'); sync();
+      if (!$('feedback-text').value.trim()) transcribeRecording();
     };
     recorder.start(250);
     started = Date.now();
@@ -116,15 +121,31 @@ async function toggleRecording() {
     releaseMic(); status(micError(error), true);
   } finally { requesting = false; sync(); }
 }
+async function transcribeRecording() {
+  if (!recording || busy || transcribing || submissionID) return;
+  if ($('feedback-text').value.trim() && !window.confirm('Replace your current text with a new transcript?')) return;
+  transcribing = true; sync(); status('Transcribing your recording. Nothing has been saved to feedback yet.');
+  const form = new FormData(); form.append('token', token);
+  const extension = recording.type.includes('mp4') ? 'mp4' : recording.type.includes('ogg') ? 'ogg' : 'webm';
+  form.append('audio', recording, `recording.${extension}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 100000);
+  try {
+    const response = await fetch('/api/transcribe', {method:'POST', body:form, signal:controller.signal});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || 'Transcription failed.');
+    $('feedback-text').value = result.transcript || '';
+    status(result.transcript ? 'Review and edit the text below. Send saves only your final text and rating.' : 'No speech was detected. Retry, type your feedback, or discard the recording.');
+  } catch (error) {
+    status('Transcription could not finish. Your recording is still here. Retry, type your feedback, or discard it to send only your rating.', true);
+  } finally { clearTimeout(timeout); transcribing = false; sync(); $('feedback-text').focus(); }
+}
 async function sendRecording() {
-  if (!ready || !rating || busy || requesting || recorder?.state === 'recording' || !$('participant-name').value.trim()) return;
-  const includeAudio = Boolean(recording);
+  if (!ready || !rating || busy || transcribing || requesting || recorder?.state === 'recording' || !$('participant-name').value.trim() || (recording && !$('feedback-text').value.trim())) return;
   submissionID ||= crypto.randomUUID();
-  busy = true; $('playback').pause(); sync(); status(includeAudio ? 'Uploading and transcribing your feedback. Keep this page open.' : 'Saving your feedback…');
+  busy = true; $('playback').pause(); sync(); status('Saving your feedback…');
   const form = new FormData();
-  const extension = recording?.type.includes('mp4') ? 'mp4' : recording?.type.includes('ogg') ? 'ogg' : 'webm';
-  for (const [key, value] of Object.entries({token, question_id: questions[index].id, submission_id: submissionID, participant_name: $('participant-name').value.trim(), rating, consent: 'true'})) form.append(key, value);
-  if (includeAudio) form.append('audio', recording, `recording.${extension}`);
+  for (const [key, value] of Object.entries({token, question_id: questions[index].id, submission_id: submissionID, participant_name: $('participant-name').value.trim(), rating, feedback_text: $('feedback-text').value.trim(), consent: 'true'})) form.append(key, value);
   try {
     const response = await fetch('/api/answer', {method: 'POST', body: form});
     const result = await response.json().catch(() => ({}));
@@ -133,7 +154,7 @@ async function sendRecording() {
     $('form-panel').hidden = true; $('success').hidden = false;
     $('receipt').textContent = `Reference: ${result.id}`;
     $('next').hidden = index + 1 >= questions.length;
-    status(includeAudio && !result.transcript_available ? 'Your feedback and audio are saved. A transcript is not available yet; the organizing team can listen to your recording.' : '');
+    status(); $('feedback-text').value = '';
     clearRecording(); $('success').focus();
   } catch (error) {
     status(`${error.message || 'Connection lost.'} Your feedback is still here. Please retry sending.`, true);
@@ -141,17 +162,19 @@ async function sendRecording() {
 }
 $('record').addEventListener('click', toggleRecording);
 $('redo').addEventListener('click', () => { clearRecording(); status(); $('record').focus(); });
+$('transcribe').addEventListener('click', transcribeRecording);
+$('feedback-text').addEventListener('input', sync);
 $('send').addEventListener('click', sendRecording);
 $('participant-name').addEventListener('input', sync);
 ratingInputs.forEach(input => input.addEventListener('change', () => { rating = Number(input.value); sync(); }));
 $('next').addEventListener('click', () => {
-  index++; rating = 0; ratingInputs.forEach(input => input.checked = false); clearRecording(); renderQuestion(); $('success').hidden = true; $('form-panel').hidden = false; status(); $('record').focus();
+  index++; $('feedback-text').value = ''; rating = 0; ratingInputs.forEach(input => input.checked = false); clearRecording(); renderQuestion(); $('success').hidden = true; $('form-panel').hidden = false; status(); $('record').focus();
 });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && recorder?.state === 'recording') recorder.stop();
 });
 window.addEventListener('beforeunload', event => {
-  if (recording || busy || recorder?.state === 'recording') { event.preventDefault(); event.returnValue = ''; }
+  if (recording || busy || transcribing || $('feedback-text').value.trim() || recorder?.state === 'recording') { event.preventDefault(); event.returnValue = ''; }
 });
 window.addEventListener('pagehide', releaseMic);
 (async () => {

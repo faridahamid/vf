@@ -106,7 +106,7 @@ def transcription_error(error):
         return "The transcription provider's quota or rate limit was reached. Check the API project's usage and plan."
     if isinstance(error, HTTPException) and error.status_code == 503:
         return "The selected provider's API key is missing from the server configuration."
-    return "Transcription failed. Check the selected provider, model, connection, and API project. The original audio is preserved."
+    return "Transcription failed. Check the selected provider, model, connection, and API project. The participant can retry or type their feedback."
 
 
 def limit(key, n=100):
@@ -159,80 +159,69 @@ def response_lock(rid):
         yield
 
 
+@app.post("/api/transcribe")
+def preview_transcription(request: Request, token: str = Form(...), audio: UploadFile = File(...)):
+    try:
+        if not secrets.compare_digest(token, setting("EVENT_TOKEN")):
+            raise HTTPException(403, "Invalid event link. Use the organizer's full link.")
+        limit("transcribe:" + (request.client.host if request.client else "unknown"), 120)
+        data = audio.file.read(MAX_AUDIO_BYTES + 1)
+        ctype = (audio.content_type or "").split(";")[0].lower()
+        if not data:
+            raise HTTPException(400, "Recording is empty. Record again or type your feedback.")
+        if len(data) > MAX_AUDIO_BYTES:
+            raise HTTPException(413, "Recording is too large. Please record a shorter answer.")
+        if ctype not in FORMATS:
+            raise HTTPException(415, "Unsupported audio format.")
+        global last_transcription_error
+        try:
+            transcript, _ = transcribe_audio(data, ctype, "mixed")
+            last_transcription_error = None
+            return {"transcript": transcript}
+        except Exception as error:
+            last_transcription_error = transcription_error(error)
+            raise HTTPException(502, "Could not transcribe. Retry, type your feedback, or discard the recording and send your rating.")
+    finally:
+        # Multipart uploads may use temporary spooled files; close them on every path.
+        audio.file.close()
+
+
 @app.post("/api/answer")
 def answer(request: Request, token: str = Form(...), question_id: str = Form(...),
            submission_id: UUID = Form(...), participant_name: str = Form(...),
            rating: int | None = Form(None), consent: bool = Form(False),
-           audio: UploadFile | None = File(None)):
+           feedback_text: str = Form(""), audio: UploadFile | None = File(None)):
     if not secrets.compare_digest(token, setting("EVENT_TOKEN")):
         raise HTTPException(403, "This event link is invalid. Ask the organizer for the full feedback link.")
     if not consent:
         raise HTTPException(400, "Please agree to share your feedback.")
+    if audio is not None:
+        audio.file.close()
+        raise HTTPException(409, "This page is outdated. Refresh to review your transcript before sending. Audio is no longer saved.")
     question = next((q for q in config.QUESTIONS if q["id"] == question_id), None)
-    if not question and question_id in config.LEGACY_QUESTIONS:
-        question = {"id": question_id, "en": config.LEGACY_QUESTIONS[question_id]}
     if not question:
         raise HTTPException(400, "Unknown question. Refresh the page and try again.")
-    if question.get("rating") and rating is None:
-        raise HTTPException(400, "Please choose a rating from 1 to 5.")
-    if rating is not None and not 1 <= rating <= 5:
+    if rating is None or not 1 <= rating <= 5:
         raise HTTPException(400, "Please choose a rating from 1 to 5.")
     participant_name = participant_name.strip()
     if not participant_name or len(participant_name) > 120:
         raise HTTPException(400, "Please enter a name between 1 and 120 characters.")
+    feedback_text = feedback_text.strip()
+    if len(feedback_text) > 10000:
+        raise HTTPException(400, "Please keep feedback within 10,000 characters.")
     limit(request.client.host if request.client else "unknown", SUBMISSIONS_PER_IP_HOUR)
-    data, ctype, path = None, None, None
     rid = str(submission_id)
-    if audio is not None:
-        data = audio.file.read(MAX_AUDIO_BYTES + 1)
-        if not data:
-            raise HTTPException(400, "Your recording is empty. Remove it or record again.")
-        if len(data) > MAX_AUDIO_BYTES:
-            raise HTTPException(413, "Recording is too large. Please record a shorter answer.")
-        ctype = (audio.content_type or "").split(";")[0].lower()
-        if ctype not in FORMATS:
-            raise HTTPException(415, "Unsupported audio format. Try Chrome, Edge, or Safari.")
-        path = f"{question_id}/{rid}.{FORMATS[ctype]}"
-    sb = database()
     with response_lock(rid):
         try:
-            existing = sb.table("responses").select("id,transcript,audio_path").eq("id", rid).execute().data
-            if existing:
-                return {"id": rid, "saved": True, "audio_saved": bool(existing[0].get("audio_path")), "transcript_available": bool(existing[0]["transcript"])}
-            if data is not None:
-                sb.storage.from_(AUDIO_BUCKET).upload(path, data, {"content-type": ctype, "upsert": "true"})
-            # Persist feedback before the slow provider call, so restarts or quota errors
-            # cannot lose the rating, name, or reference to the original audio.
-            sb.table("responses").upsert({
+            database().table("responses").upsert({
                 "id": rid, "participant_name": participant_name, "question_id": question_id,
-                "ptype": "participant", "lang": "auto" if data is not None else None, "rating": rating,
-                "transcript": "", "transcript_raw": "", "audio_path": path,
+                "ptype": "participant", "lang": None, "rating": rating,
+                "transcript": feedback_text, "transcript_raw": "", "audio_path": None,
                 "model": None, "edit_key": secrets.token_urlsafe(24), "is_test": IS_TEST
             }, on_conflict="id", ignore_duplicates=True).execute()
         except Exception:
-            log.error("Feedback storage failed; retry keeps the same submission ID.")
             raise HTTPException(502, "Could not save your feedback. Please try sending again.")
-    transcript = ""
-    if data is not None:
-        try:
-            transcript, model = transcribe_audio(data, ctype, "mixed")
-            # Update, never upsert: an admin deletion during transcription stays deleted.
-            with response_lock(rid):
-                updated = sb.table("responses").update({"transcript": transcript, "transcript_raw": transcript, "model": model}).eq("id", rid).execute().data
-                if not updated:
-                    raise HTTPException(410, "This feedback was removed by an organizer.")
-            global last_transcription_error
-            last_transcription_error = None
-        except HTTPException as error:
-            if error.status_code == 410:
-                raise
-            transcript = ""
-            last_transcription_error = transcription_error(error)
-        except Exception as error:
-            transcript = ""
-            last_transcription_error = transcription_error(error)
-            log.warning("Transcription unavailable: %s", last_transcription_error)
-    return {"id": rid, "saved": True, "audio_saved": data is not None, "transcript_available": bool(transcript)}
+    return {"id": rid, "saved": True}
 
 
 @app.delete("/api/admin/responses/{rid}")
