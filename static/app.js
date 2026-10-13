@@ -52,7 +52,7 @@ function clearRecording() {
 }
 function renderQuestion() {
   $('question').textContent = questions[index].en;
-  $('progress').textContent = questions.length > 1 ? `QUESTION ${index + 1} OF ${questions.length}` : 'PARTICIPANT FEEDBACK';
+  $('progress').textContent = questions.length > 1 ? `QUESTION ${index + 1} OF ${questions.length}` : 'YOUR FEEDBACK';
 }
 function micError(error) {
   const messages = {
@@ -179,12 +179,14 @@ window.addEventListener('beforeunload', event => {
 window.addEventListener('pagehide', releaseMic);
 (async () => {
   try {
-    const response = await fetch('/api/config');
+    const response = await fetch('/api/config?t=' + encodeURIComponent(token));
     if (!response.ok) throw new Error('Could not load the question. Refresh the page to try again.');
     const result = await response.json();
     if (!result.questions?.length) throw new Error('No feedback questions are available yet. Please contact the organizer.');
     $('provider-name').textContent = result.transcription_provider || 'the selected transcription provider';
     $('gemini-notice').hidden = !result.gemini_test_notice;
+    $('audience-heading').textContent = (result.audience_label || 'Participants').toUpperCase() + ' · FEEDBACK';
+    $('intro').textContent = result.intro || $('intro').textContent;
     questions = result.questions; maxSeconds = result.max_seconds || 90;
     maxAudioBytes = result.max_audio_bytes || 4_000_000; renderQuestion();
     if (!token) throw new Error('This link is missing the event code. Please use the full feedback link or QR code from the organizer.');

@@ -33,7 +33,7 @@ async function createPage(options = {}) {
     sessionStorage:{getItem:()=>options.storedToken || '',setItem(){}},
     setInterval(){return 1;}, clearInterval(){}, queueMicrotask,
     fetch:async (url, init) => {
-      if (url === '/api/config') return {ok:true,json:async()=>({questions:[{id:'q1',en:'What was valuable?'}], max_seconds:90,is_test:true})};
+      if (url.startsWith('/api/config')) return {ok:true,json:async()=>({questions:[{id:'q1',en:'What was valuable?'}], max_seconds:90,is_test:true})};
       if (url === '/api/transcribe') return options.transcribe ? options.transcribe() : {ok:true,json:async()=>({transcript:'Generated transcript'})};
       requests.push(init.body);
       if(options.send) return options.send(requests.length);

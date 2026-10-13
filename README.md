@@ -95,3 +95,14 @@ Restart the local server after changing settings. For Vercel setting changes, cr
 | `.env.example` | Placeholder configuration template; use the full settings table above. |
 
 
+
+
+## Audience links and filters
+
+Five groups are supported: participants, speakers, volunteers, mentors and judges. Each link loads a dedicated introduction and question. The server derives the saved `ptype` from the validated link, not from a client-supplied category. Name, rating and reviewed text still go to the same responses table; no new audio is stored.
+
+Sign in to admin and load feedback, then expand **Audience links — share with each group**. Click a link field to select and copy its full URL. Links use the current site's origin: copy production links from production admin, not localhost. No extra environment variables or SQL migrations are needed. The participant link is unchanged. Other audience codes are stable HMAC-derived codes based on EVENT_TOKEN; changing that setting rotates all links.
+
+The Audience selector filters database results before pagination. CSV export follows the selected group and includes all matching pages. Choose All groups to export everything. Existing participant records remain visible. Shared links categorize responses but do not verify someone's role or identity.
+
+Deploy backend and frontend together. Reload the participant/admin pages after deployment. Use one test submission for each audience, confirm its group in admin, and test filtered exports. Opening a new group link replaces the remembered token for that tab.

@@ -1,4 +1,6 @@
 """Voice feedback API. Credentials stay on the server; audio bucket stays private."""
+import hmac
+import hashlib
 import csv
 import io
 import logging
@@ -145,11 +147,38 @@ def health():
     return {"status": "ok"}
 
 
+def audience_tokens():
+    secret = setting("EVENT_TOKEN")
+    return {role: secret if role == "participant" else hmac.new(secret.encode(), ("audience:v1:" + role).encode(), hashlib.sha256).hexdigest() for role in config.AUDIENCES}
+
+
+def resolve_audience(token):
+    for role, expected in audience_tokens().items():
+        if secrets.compare_digest(token or "", expected):
+            return role
+    raise HTTPException(403, "This event link is invalid. Ask the organizer for the full feedback link.")
+
+
+def validate_filter(audience):
+    if audience and audience not in config.AUDIENCES:
+        raise HTTPException(400, "Unknown audience.")
+
+
 @app.get("/api/config")
-def cfg():
-    return {"questions": config.QUESTIONS, "is_test": IS_TEST, "max_seconds": 90, "max_audio_bytes": MAX_AUDIO_BYTES,
+def cfg(t: str = ""):
+    role = resolve_audience(t) if t else "participant"
+    audience = config.AUDIENCES[role]
+    return {"questions": [audience["question"]], "audience": role, "audience_label": audience["label"], "intro": audience["intro"], "is_test": IS_TEST, "max_seconds": 90, "max_audio_bytes": MAX_AUDIO_BYTES,
             "transcription_provider": "Google Gemini" if config.PROVIDER == "gemini" else "OpenAI",
             "gemini_test_notice": config.PROVIDER == "gemini" and IS_TEST}
+
+
+@app.get("/api/admin/links")
+def audience_links(request: Request, x_admin_password: str = Header(None)):
+    limit("admin:" + (request.client.host if request.client else "unknown"), 300)
+    check_admin(x_admin_password)
+    from urllib.parse import urlencode
+    return [{"audience": role, "label": config.AUDIENCES[role]["label"], "path": "/?" + urlencode({"t": token})} for role, token in audience_tokens().items()]
 
 
 @contextmanager
@@ -162,8 +191,7 @@ def response_lock(rid):
 @app.post("/api/transcribe")
 def preview_transcription(request: Request, token: str = Form(...), audio: UploadFile = File(...)):
     try:
-        if not secrets.compare_digest(token, setting("EVENT_TOKEN")):
-            raise HTTPException(403, "Invalid event link. Use the organizer's full link.")
+        resolve_audience(token)
         limit("transcribe:" + (request.client.host if request.client else "unknown"), 120)
         data = audio.file.read(MAX_AUDIO_BYTES + 1)
         ctype = (audio.content_type or "").split(";")[0].lower()
@@ -191,15 +219,14 @@ def answer(request: Request, token: str = Form(...), question_id: str = Form(...
            submission_id: UUID = Form(...), participant_name: str = Form(...),
            rating: int | None = Form(None), consent: bool = Form(False),
            feedback_text: str = Form(""), audio: UploadFile | None = File(None)):
-    if not secrets.compare_digest(token, setting("EVENT_TOKEN")):
-        raise HTTPException(403, "This event link is invalid. Ask the organizer for the full feedback link.")
+    role = resolve_audience(token)
     if not consent:
         raise HTTPException(400, "Please agree to share your feedback.")
     if audio is not None:
         audio.file.close()
         raise HTTPException(409, "This page is outdated. Refresh to review your transcript before sending. Audio is no longer saved.")
-    question = next((q for q in config.QUESTIONS if q["id"] == question_id), None)
-    if not question:
+    question = config.AUDIENCES[role]["question"]
+    if question["id"] != question_id:
         raise HTTPException(400, "Unknown question. Refresh the page and try again.")
     if rating is None or not 1 <= rating <= 5:
         raise HTTPException(400, "Please choose a rating from 1 to 5.")
@@ -215,7 +242,7 @@ def answer(request: Request, token: str = Form(...), question_id: str = Form(...
         try:
             database().table("responses").upsert({
                 "id": rid, "participant_name": participant_name, "question_id": question_id,
-                "ptype": "participant", "lang": None, "rating": rating,
+                "ptype": role, "lang": None, "rating": rating,
                 "transcript": feedback_text, "transcript_raw": "", "audio_path": None,
                 "model": None, "edit_key": secrets.token_urlsafe(24), "is_test": IS_TEST
             }, on_conflict="id", ignore_duplicates=True).execute()
@@ -257,14 +284,18 @@ def admin_status(request: Request, x_admin_password: str = Header(None)):
 
 
 @app.get("/api/admin/responses")
-def rows(request: Request, x_admin_password: str = Header(None), offset: int = 0):
+def rows(request: Request, x_admin_password: str = Header(None), offset: int = 0, audience: str = ""):
     limit("admin:" + (request.client.host if request.client else "unknown"), 300)
     check_admin(x_admin_password)
+    validate_filter(audience)
     if offset < 0:
         raise HTTPException(400, "Invalid page.")
     try:
         sb = database()
-        data = sb.table("responses").select(FIELDS).order("created_at", desc=True).order("id").range(offset, offset + 99).execute().data
+        query = sb.table("responses").select(FIELDS).order("created_at", desc=True).order("id")
+        if audience:
+            query = query.eq("ptype", audience)
+        data = query.range(offset, offset + 99).execute().data
         for row in data:
             if row["audio_path"]:
                 try:
@@ -285,18 +316,21 @@ def safe_cell(value):
 
 
 @app.get("/api/admin/export")
-def export(request: Request, x_admin_password: str = Header(None), include_tests: bool = True):
+def export(request: Request, x_admin_password: str = Header(None), include_tests: bool = True, audience: str = ""):
     limit("export:" + (request.client.host if request.client else "unknown"), 60)
     check_admin(x_admin_password)
+    validate_filter(audience)
     columns = ["id", "created_at", "participant_name", "question_id", "question", "ptype", "lang", "rating", "transcript", "transcript_raw", "audio_path", "model", "is_test"]
     output = io.StringIO(newline="")
     writer = csv.writer(output)
     writer.writerow(columns)
-    questions = {**config.LEGACY_QUESTIONS, **{q["id"]: q["en"] for q in config.QUESTIONS}}
+    questions = {**config.LEGACY_QUESTIONS, **{a["question"]["id"]: a["question"]["en"] for a in config.AUDIENCES.values()}}
     try:
         offset = 0
         while True:
             query = database().table("responses").select(FIELDS).order("created_at").order("id")
+            if audience:
+                query = query.eq("ptype", audience)
             if not include_tests:
                 query = query.eq("is_test", False)
             batch = query.range(offset, offset + 999).execute().data

@@ -155,3 +155,36 @@ def test_concurrent_text_submissions(setup):
     assert len(db.rows) == 40
     assert all(r['transcript'] == 'Text '+r['participant_name'] for r in db.rows)
     assert not db.uploads and not calls
+
+@pytest.mark.parametrize('role', ['participant','speaker','volunteer','mentor','judge'])
+def test_audience_links_submission_and_question_binding(setup, role):
+    client, db, calls = setup
+    token = main.audience_tokens()[role]
+    info = client.get('/api/config', params={'t': token}).json()
+    assert info['audience'] == role and info['intro']
+    question_id = info['questions'][0]['id']
+    assert send(client, token=token, question_id=question_id, ptype='forged').status_code == 200
+    assert db.rows[0]['ptype'] == role and db.rows[0]['audio_path'] is None
+    assert transcribe(client, token=token).status_code == 200
+    assert not db.uploads
+    if role != 'participant':
+        assert send(client, token=token, question_id='experience').status_code == 400
+
+
+def test_admin_links_and_filtered_export(setup):
+    client, db, _ = setup
+    assert client.get('/api/admin/links').status_code == 401
+    headers={'X-Admin-Password':'test-admin'}
+    links=client.get('/api/admin/links',headers=headers).json()
+    assert len(links)==5 and len({x['path'] for x in links})==5
+    assert links[0]['path']=='/?t=test-token'
+    send(client, participant_name='Participant Example')
+    for i in range(102):
+        assert send(client,token=main.audience_tokens()['mentor'],question_id='mentor_experience',participant_name='Mentor Example').status_code==200
+    page=client.get('/api/admin/responses?audience=mentor&offset=100',headers=headers).json()
+    assert len(page)==2 and all(r['ptype']=='mentor' for r in page)
+    csv=client.get('/api/admin/export?audience=mentor',headers=headers).text
+    assert csv.count('Mentor Example')==102 and 'Participant Example' not in csv
+    assert client.get('/api/admin/responses?audience=invalid',headers=headers).status_code==400
+    assert client.get('/api/admin/export?audience=invalid',headers=headers).status_code==400
+    assert client.get('/api/config?t=invalid').status_code==403

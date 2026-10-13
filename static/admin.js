@@ -3,6 +3,7 @@ const $ = id => document.getElementById(id);
 let data = [], offset = 0, hasMore = false, busy = false, password = '';
 function message(text) { $('status').textContent = text; }
 function buttons() {
+  $('audience-filter').disabled = busy;
   $('load').disabled = busy; $('more').disabled = busy;
   $('export').disabled = busy || !password;
   document.querySelectorAll('.delete-button').forEach(button => button.disabled = busy);
@@ -19,6 +20,7 @@ function draw() {
     const row = document.createElement('tr');
     const time = cell(row, new Date(item.created_at).toLocaleString());
     cell(row, item.participant_name || 'Not provided').dir = 'auto';
+    cell(row, item.ptype || 'participant');
     cell(row, item.question_id);
     cell(row, item.rating == null ? '—' : `${item.rating} / 5`);
     const transcript = cell(row, item.transcript || (item.audio_path ? 'Transcript not available — listen to the recording.' : 'Rating only'), 'transcript'); transcript.dir = 'auto';
@@ -31,17 +33,31 @@ function draw() {
     remove.addEventListener('click', () => deleteFeedback(item)); actions.append(remove);
     $('responses').append(row);
   }
-  if (!visible.length) { const row = document.createElement('tr'); const td = cell(row, 'No feedback yet.'); td.colSpan = 7; $('responses').append(row); }
+  if (!visible.length) { const row = document.createElement('tr'); const td = cell(row, 'No feedback yet.'); td.colSpan = 8; $('responses').append(row); }
   $('more').hidden = !hasMore;
 }
 async function load(reset = true) {
   if (busy) return; busy = true; buttons(); message('Loading feedback…');
   const candidate = reset ? $('password').value : password;
   try {
-    const response = await fetch(`/api/admin/responses?offset=${reset ? 0 : offset}`, {headers: {'X-Admin-Password': candidate}});
+    const response = await fetch(`/api/admin/responses?offset=${reset ? 0 : offset}&audience=${encodeURIComponent($('audience-filter').value)}`, {headers: {'X-Admin-Password': candidate}});
     const result = await response.json();
     if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Could not load feedback.');
     password = candidate;
+    try {
+      const linksResponse = await fetch('/api/admin/links', {headers: {'X-Admin-Password': password}});
+      if (linksResponse.ok) {
+        const links = await linksResponse.json(); $('links-list').replaceChildren();
+        for (const item of links) {
+          const label = document.createElement('label'); label.textContent = item.label;
+          const input = document.createElement('input'); input.type = 'text'; input.readOnly = true;
+          input.value = new URL(item.path, location.origin).href;
+          input.addEventListener('click', () => input.select()); label.append(input); $('links-list').append(label);
+        }
+        $('audience-links').hidden = false;
+      }
+    } catch { /* Feedback remains accessible if link loading fails. */ }
+
     try {
       const check = await fetch('/api/admin/status', {headers: {'X-Admin-Password': password}});
       if (check.ok) {
@@ -56,12 +72,13 @@ async function load(reset = true) {
   finally { busy = false; buttons(); }
 }
 $('login').addEventListener('submit', event => { event.preventDefault(); load(); });
+$('audience-filter').addEventListener('change', () => { data = []; offset = 0; hasMore = false; draw(); if (password) load(); });
 $('more').addEventListener('click', () => load(false));
 
 $('export').addEventListener('click', async () => {
   if (busy) return; busy = true; buttons(); message('Preparing all matching feedback…');
   try {
-    const response = await fetch('/api/admin/export?include_tests=true', {headers: {'X-Admin-Password': password}});
+    const response = await fetch('/api/admin/export?include_tests=true&audience=' + encodeURIComponent($('audience-filter').value), {headers: {'X-Admin-Password': password}});
     if (!response.ok) { const error = await response.json(); throw new Error(error.detail || 'Export failed.'); }
     const url = URL.createObjectURL(await response.blob());
     const link = document.createElement('a'); link.href = url; link.download = 'space-apps-feedback.csv'; document.body.append(link); link.click(); link.remove();
