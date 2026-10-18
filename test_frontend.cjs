@@ -9,7 +9,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 async function createPage(options = {}) {
   const nodes = new Map();
   const element = id => {
-    if (!nodes.has(id)) nodes.set(id, {textContent:'', hidden:false, disabled:false, checked:false, value:'', handlers:{}, firstElementChild:{}, classList:{toggle(){}}, setAttribute(){}, removeAttribute(){}, load(){}, pause(){}, focus(){}, addEventListener(name, callback){this.handlers[name]=callback;}});
+    if (!nodes.has(id)) nodes.set(id, {textContent:'', hidden:false, disabled:false, checked:false, value:'', children:[], append(...items){this.children.push(...items);}, handlers:{}, firstElementChild:{}, classList:{toggle(){}}, setAttribute(){}, removeAttribute(){}, load(){}, pause(){}, focus(){}, addEventListener(name, callback){this.handlers[name]=callback;}});
     return nodes.get(id);
   };
   element('record').disabled = true; element('send').disabled = true;
@@ -24,7 +24,7 @@ async function createPage(options = {}) {
     stop() {this.state='inactive';this.ondataavailable({data:new Blob(['test audio'], {type:this.mimeType})}); queueMicrotask(() => this.onstop());}
   }
   const ctx = {
-    document:{hidden:false,getElementById:element,querySelector:()=>element("brand"),querySelectorAll:()=>ratings,addEventListener(){}},
+    document:{hidden:false,createElement:tag=>element("created-"+nodes.size),getElementById:element,querySelector:()=>element("brand"),querySelectorAll:()=>ratings,addEventListener(){}},
     window:{confirm:()=>false,isSecureContext: options.secure !== false, MediaRecorder:Recorder, addEventListener(){}},
     navigator:{mediaDevices:{getUserMedia: async () => {if(options.denied)throw {name:'NotAllowedError'};return {getTracks:()=>[track]};}}},
     MediaRecorder:Recorder, URLSearchParams, URL:{createObjectURL:()=> 'blob:test',revokeObjectURL(){}},
@@ -33,7 +33,7 @@ async function createPage(options = {}) {
     sessionStorage:{getItem:()=>options.storedToken || '',setItem(){}},
     setInterval(){return 1;}, clearInterval(){}, queueMicrotask,
     fetch:async (url, init) => {
-      if (url.startsWith('/api/config')) return {ok:true,json:async()=>({questions:[{id:'q1',en:'What was valuable?'}], max_seconds:90,is_test:true})};
+      if (url.startsWith('/api/config')) return {ok:true,json:async()=>({audience:options.audience,workshops:options.workshops,questions:options.questions || [{id:'q1',en:'What was valuable?'}], max_seconds:90,is_test:true})};
       if (url === '/api/transcribe') return options.transcribe ? options.transcribe() : {ok:true,json:async()=>({transcript:'Generated transcript'})};
       requests.push(init.body);
       if(options.send) return options.send(requests.length);
@@ -134,4 +134,79 @@ test('recording preserves existing typed text and replacement can be declined',a
  const page=await createPage();page.element('feedback-text').value='My original answer';await page.record();
  assert.equal(page.element('feedback-text').value,'My original answer');
  await page.click('transcribe');assert.equal(page.element('feedback-text').value,'My original answer');
+});
+
+
+test('multiple ratings save distinct questions, reset the rating, and finish on the last answer',async()=>{
+ const page=await createPage({questions:[{id:'speaker_experience',en:'Overall?'},{id:'speaker_support',en:'Support?'}]});
+ await page.click('send');
+ assert.equal(page.requests[0].get('question_id'),'speaker_experience');
+ assert.equal(page.element('next').hidden,false);
+ assert.match(page.element('success-message').textContent,/question 2 of 2/);
+ await page.click('next');
+ assert.equal(page.element('question').textContent,'Support?');
+ assert.equal(page.element('send').disabled,true);
+ page.element('rating-5').handlers.change();
+ await page.click('send');
+ assert.equal(page.requests[1].get('question_id'),'speaker_support');
+ assert.notEqual(page.requests[0].get('submission_id'),page.requests[1].get('submission_id'));
+ assert.equal(page.element('next').hidden,true);
+});
+
+
+test('speaker submits the workshop and all five ratings in one request',async()=>{
+ const questions=['experience','support','communication','session_reception','future_engagement'].map(id=>({id:'speaker_'+id,en:id,scale_labels:['Low','','','','High']}));
+ const page=await createPage({audience:'speaker',workshops:['Video Editing'],questions});
+ assert.equal(page.element('single-rating').hidden,true);
+ assert.equal(page.element('speaker-fields').hidden,false);
+ assert.equal(page.element('speaker-questions').children.length,5);
+ await page.click('send');assert.equal(page.requests.length,0);
+ page.element('workshop').value='Video Editing';page.element('workshop').handlers.change();
+ assert.equal(page.element('final-feedback').hidden,true);
+ await page.click('step-continue');
+ assert.equal(page.element('speaker-questions').children[0].hidden,false);
+ assert.equal(page.element('speaker-questions').children[1].hidden,true);
+ for(const field of page.element('speaker-questions').children){
+   field.children[1].children[3].children[0].handlers.change();
+ }
+ assert.equal(page.requests.length,0);
+ assert.equal(page.element('final-feedback').hidden,false);
+ page.element('feedback-text').value='Keep my draft';
+ await page.click('step-back');
+ assert.equal(page.element('final-feedback').hidden,true);
+ assert.equal(page.element('speaker-questions').children[4].hidden,false);
+ await page.click('step-continue');
+ assert.equal(page.element('feedback-text').value,'Keep my draft');
+ assert.equal(page.element('send').disabled,false);
+ await page.click('send');
+ assert.equal(page.requests.length,1);
+ assert.equal(page.requests[0].get('workshop'),'Video Editing');
+ assert.equal(page.requests[0].get('question_id'),'speaker_form');
+ assert.equal(Object.keys(JSON.parse(page.requests[0].get('ratings'))).length,5);
+ assert.equal(page.element('next').hidden,true);
+});
+
+
+test('volunteer wizard supports choices, optional skipping, back navigation and one submission',async()=>{
+ const questions=[
+  {id:'volunteer_agenda',en:'Agenda?',required:false,scale_labels:['Strongly Disagree','','','','Strongly Agree']},
+  {id:'volunteer_recommendation',en:'Return?',options:['Yes','No','Maybe']},
+  {id:'volunteer_delivery',en:'Delivery?',scale_labels:['Strongly Disagree','','','','Strongly Agree']}
+ ];
+ const page=await createPage({audience:'volunteer',workshops:['NASA Data'],questions});
+ page.element('workshop').value='NASA Data';page.element('workshop').handlers.change();
+ await page.click('step-continue');assert.equal(page.element('step-skip').hidden,false);
+ await page.click('step-skip');
+ const fields=page.element('speaker-questions').children;
+ assert.equal(fields[1].hidden,false);
+ assert.equal(fields[1].children[1].children.length,3);
+ fields[1].children[1].children[2].children[0].handlers.change();
+ fields[2].children[1].children[4].children[0].handlers.change();
+ assert.equal(page.requests.length,0);assert.equal(page.element('final-feedback').hidden,false);
+ await page.click('step-back');await page.click('step-continue');
+ await page.click('send');assert.equal(page.requests.length,1);
+ const scores=JSON.parse(page.requests[0].get('ratings'));
+ assert.equal(scores.volunteer_agenda,null);assert.equal(scores.volunteer_recommendation,'Maybe');
+ assert.equal(scores.volunteer_delivery,5);assert.equal(page.requests[0].get('question_id'),'volunteer_form');
+ assert.equal(page.requests[0].get('rating'),'5');
 });

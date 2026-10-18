@@ -1,8 +1,13 @@
 'use strict';
 const $ = id => document.getElementById(id);
+let reportState = null, reportBusy = false;
 let data = [], offset = 0, hasMore = false, busy = false, password = '';
+function adminHeaders(value) { return {'X-Admin-Password': encodeURIComponent(value), 'X-Admin-Password-Encoding': 'percent-utf8'}; }
 function message(text) { $('status').textContent = text; }
 function buttons() {
+  $('report-status').disabled = !password || busy || reportBusy;
+  $('report-generate').disabled = !password || busy || reportBusy || !reportState?.can_generate || Boolean(reportState?.saved && !reportState.changed);
+  $('report-download').disabled = !password || busy || reportBusy || !reportState?.saved;
   $('audience-filter').disabled = busy;
   $('load').disabled = busy; $('more').disabled = busy;
   $('export').disabled = busy || !password;
@@ -21,8 +26,11 @@ function draw() {
     const time = cell(row, new Date(item.created_at).toLocaleString());
     cell(row, item.participant_name || 'Not provided').dir = 'auto';
     cell(row, item.ptype || 'participant');
-    cell(row, item.question_id);
-    cell(row, item.rating == null ? '—' : `${item.rating} / 5`);
+    cell(row, item.question_id === 'speaker_form' ? 'Speaker feedback form' : item.question_id === 'volunteer_form' ? 'Volunteer session evaluation' : item.question_id);
+    cell(row, item.workshop || '—');
+    const labels = {speaker_experience:'Overall experience', speaker_support:'Organizer support', speaker_communication:'Communication', speaker_session_reception:'Session reception', speaker_future_engagement:'Likelihood to return'};
+    cell(row, Object.entries(item.scores || {}).map(([id, value]) => `${item.score_labels?.[id] || labels[id] || id}: ${value == null ? 'Skipped' : typeof value === 'number' ? value + '/5' : value}`).join(' · ') || '—');
+    cell(row, item.average_rating != null ? `${Number(item.average_rating).toFixed(1)} / 5 (average)` : item.rating == null ? '—' : `${item.rating} / 5 (single)`);
     const transcript = cell(row, item.transcript || (item.audio_path ? 'Transcript not available — listen to the recording.' : 'Rating only'), 'transcript'); transcript.dir = 'auto';
     const recording = cell(row, '');
     if (item.audio_url) {
@@ -33,19 +41,20 @@ function draw() {
     remove.addEventListener('click', () => deleteFeedback(item)); actions.append(remove);
     $('responses').append(row);
   }
-  if (!visible.length) { const row = document.createElement('tr'); const td = cell(row, 'No feedback yet.'); td.colSpan = 8; $('responses').append(row); }
+  if (!visible.length) { const row = document.createElement('tr'); const td = cell(row, 'No feedback yet.'); td.colSpan = 10; $('responses').append(row); }
   $('more').hidden = !hasMore;
 }
 async function load(reset = true) {
   if (busy) return; busy = true; buttons(); message('Loading feedback…');
   const candidate = reset ? $('password').value : password;
   try {
-    const response = await fetch(`/api/admin/responses?offset=${reset ? 0 : offset}&audience=${encodeURIComponent($('audience-filter').value)}`, {headers: {'X-Admin-Password': candidate}});
+    const response = await fetch(`/api/admin/responses?offset=${reset ? 0 : offset}&audience=${encodeURIComponent($('audience-filter').value)}`, {headers: adminHeaders(candidate)});
     const result = await response.json();
     if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Could not load feedback.');
     password = candidate;
+    await refreshReport();
     try {
-      const linksResponse = await fetch('/api/admin/links', {headers: {'X-Admin-Password': password}});
+      const linksResponse = await fetch('/api/admin/links', {headers: adminHeaders(password)});
       if (linksResponse.ok) {
         const links = await linksResponse.json(); $('links-list').replaceChildren();
         for (const item of links) {
@@ -59,7 +68,7 @@ async function load(reset = true) {
     } catch { /* Feedback remains accessible if link loading fails. */ }
 
     try {
-      const check = await fetch('/api/admin/status', {headers: {'X-Admin-Password': password}});
+      const check = await fetch('/api/admin/status', {headers: adminHeaders(password)});
       if (check.ok) {
         const state = await check.json();
         $('provider-status').textContent = `Transcription: ${state.provider} / ${state.model}. ${state.key_configured ? 'Key configured.' : 'API key is missing.'} ${state.last_error || ''}`;
@@ -78,7 +87,7 @@ $('more').addEventListener('click', () => load(false));
 $('export').addEventListener('click', async () => {
   if (busy) return; busy = true; buttons(); message('Preparing all matching feedback…');
   try {
-    const response = await fetch('/api/admin/export?include_tests=true&audience=' + encodeURIComponent($('audience-filter').value), {headers: {'X-Admin-Password': password}});
+    const response = await fetch('/api/admin/export?audience=' + encodeURIComponent($('audience-filter').value), {headers: adminHeaders(password)});
     if (!response.ok) { const error = await response.json(); throw new Error(error.detail || 'Export failed.'); }
     const url = URL.createObjectURL(await response.blob());
     const link = document.createElement('a'); link.href = url; link.download = 'space-apps-feedback.csv'; document.body.append(link); link.click(); link.remove();
@@ -93,11 +102,55 @@ async function deleteFeedback(item) {
   if (!window.confirm(`Permanently delete feedback from ${name}? This removes the database entry and its audio file. This cannot be undone. Previously downloaded exports are not affected.`)) return;
   busy = true; buttons(); message('Deleting feedback and audio…');
   try {
-    const response = await fetch(`/api/admin/responses/${encodeURIComponent(item.id)}`, {method: 'DELETE', headers: {'X-Admin-Password': password}});
+    const response = await fetch(`/api/admin/responses/${encodeURIComponent(item.id)}`, {method: 'DELETE', headers: adminHeaders(password)});
     const result = await response.json();
     if (!response.ok || !result.deleted) throw new Error(result.detail || 'Deletion failed. Please try again.');
     data = data.filter(row => row.id !== item.id); offset = data.length;
-    draw(); message(item.audio_path ? 'Feedback and its audio file were deleted.' : 'Feedback was deleted.');
+    draw(); await refreshReport(); message(item.audio_path ? 'Feedback and its audio file were deleted.' : 'Feedback was deleted.');
   } catch (error) { message(error.message || 'Deletion failed. Reload to check the result before retrying.'); }
   finally { busy = false; buttons(); }
 }
+
+
+async function refreshReport() {
+  try {
+    const response = await fetch('/api/admin/report', {headers: adminHeaders(password)});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || 'Report status unavailable.');
+    reportState = result;
+    const saved = result.saved;
+    $('report-info').textContent = saved
+      ? `Saved ${new Date(saved.generated_at).toLocaleString()} · ${saved.pages} pages · ${saved.responses} submissions${saved.test_run ? ' · Test snapshot' : ''}. ${result.changed ? 'Feedback has changed; the saved report is an older snapshot.' : 'This report matches the current feedback.'} AI usage estimate for the saved run: $${Number(saved.usage.estimated_usd).toFixed(4)}.`
+      : `${result.responses} submissions available. No saved report yet. ${result.can_generate ? 'Estimated AI cost ceiling: about $' + result.estimated_max_usd.toFixed(3) + ' for this snapshot.' : 'Collect feedback or reduce the dataset before generation.'}`;
+  } catch (error) { reportState = null; $('report-info').textContent = error.message; }
+  buttons();
+}
+$('report-status').addEventListener('click', async () => {
+  if (reportBusy || !password) return;
+  reportBusy = true; buttons(); await refreshReport(); reportBusy = false; buttons();
+});
+$('report-generate').addEventListener('click', async () => {
+  if (reportBusy || !reportState?.can_generate || !password) return;
+  if (!window.confirm(`Generate analysis for all audiences using OpenAI API credits? Estimated ceiling: about $${reportState.estimated_max_usd.toFixed(3)}. Only generate again when you want a new feedback snapshot.`)) return;
+  reportBusy = true; buttons(); $('report-info').textContent = 'Generating and saving the report. Keep this page open. Do not start another analysis.';
+  try {
+    const body = new FormData(); body.append('snapshot', reportState.snapshot); body.append('confirm_ai', 'true');
+    const response = await fetch('/api/admin/report', {method:'POST', headers:adminHeaders(password), body});
+    const result = await response.json();
+    if (!response.ok || !result.saved) throw new Error(result.detail || 'Report generation failed.');
+    await refreshReport();
+  } catch (error) { $('report-info').textContent = error.message + ' Check report status before taking any further action.'; }
+  finally { reportBusy = false; buttons(); }
+});
+$('report-download').addEventListener('click', async () => {
+  if (reportBusy || !password) return;
+  reportBusy = true; buttons();
+  try {
+    const response = await fetch('/api/admin/report/download', {headers: adminHeaders(password)});
+    if (!response.ok) { const result = await response.json(); throw new Error(result.detail || 'Download failed.'); }
+    const url = URL.createObjectURL(await response.blob());
+    const a = document.createElement('a'); a.href = url; a.download = 'nasa-cairo-audience-analysis.pdf'; document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) { $('report-info').textContent = error.message; }
+  finally { reportBusy = false; buttons(); }
+});

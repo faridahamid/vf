@@ -106,3 +106,41 @@ Sign in to admin and load feedback, then expand **Audience links — share with 
 The Audience selector filters database results before pagination. CSV export follows the selected group and includes all matching pages. Choose All groups to export everything. Existing participant records remain visible. Shared links categorize responses but do not verify someone's role or identity.
 
 Deploy backend and frontend together. Reload the participant/admin pages after deployment. Use one test submission for each audience, confirm its group in admin, and test filtered exports. Opening a new group link replaces the remembered token for that tab.
+
+
+## Speaker form (October 2026 update)
+
+The speaker link starts with name and one of the organizer's 14 sessions/workshops. Start ratings shows one question at a time. Selecting a score advances automatically; Back and Continue allow review without losing answers. After the fifth rating, optional voice/text feedback and the final Send appear. No ratings are submitted during navigation. Name, workshop and every rating are required. One Send saves one database row atomically, using `speaker_form` as question_id. The overall score remains in rating; the selected workshop and five scores are structured JSON in the existing transcript_raw column. Final typed/reviewed comments remain in transcript. No schema migration is required. Admin shows workshop and ratings; CSV has dedicated workshop and score columns. Retries retain the same submission ID.
+
+Volunteer questions await screenshots. Other audiences retain their existing flow. The source is local until deployment.
+
+
+Admin calculates speaker averages from all five scores (equal weight, one decimal), including existing complete speaker forms. The stored overall rating remains unchanged. CSV uses readable headers and separate score columns, plus workshop, average, comments and response details. Test status and internal raw data are omitted from CSV; existing records are retained. Older single-question entries show a single rating rather than an invented average.
+
+
+## Volunteer session evaluation
+
+The volunteer audience link now offers the same 14 workshop titles and a 14-question wizard transcribed from the supplied screenshots: ten 1–5 agreement ratings and four choice questions. Agenda alignment is optional and can be skipped; the other questions are required. Choice answers are Yes/No, except the welcome-back recommendation which also allows Maybe. No answers are preselected from the example screenshots. Evaluation is by session title; the name field identifies the volunteer submitting it.
+
+Optional voice or typed observations follow the questions. One final Send stores one `volunteer_form` row using the existing JSON structure in transcript_raw, with `volunteer_delivery` retained in rating. The average uses only answered numeric ratings, excluding choices and skipped agenda alignment. Admin shows every answer, and CSV gives each question a separate readable column. No database migration or extra audience link is required.
+
+Audience-filtered CSV exports include only that audience's question columns. All groups includes both speaker and volunteer columns, with blanks for questions not applicable to a row. Admin passwords are percent-encoded as UTF-8 for HTTP headers so Arabic input reaches authentication rather than failing in the browser.
+
+
+## Saved audience analysis PDF
+
+Admin now has Check report status, Generate analysis PDF, and Download saved PDF. This always analyzes all audiences regardless of the table's Audience filter, and renders one page each for participants, speakers, volunteers, mentors and judges. Empty categories get an honest empty page. Reports are in English; Arabic and English comments can be analyzed. Names are not sent as a separate field; known submitter names, emails and phone-like strings are removed from comments, but free-form text can still contain other personal details.
+
+Generation is explicit and confirms estimated API spending. It uses the existing server-only OPENAI_API_KEY with gpt-5.4-mini, one bounded Responses API call, no reasoning, max 6,000 output tokens and no automatic SDK retries. Input is limited to 250,000 UTF-8 bytes; oversized datasets fail before calling AI, rather than silently discarding comments. Current rate assumptions for the displayed estimate are $0.75/M input and $4.50/M output; update them if pricing changes. Report usage is an estimate, not a billing receipt.
+
+Charts and statistics are calculated in Python, not by AI. The headline score averages each submission's answered numeric ratings at full precision. Yes/No/Maybe and skipped ratings are excluded. Question charts include denominators; distribution counts individual numeric answers. Counts are submissions, not verified unique people or attendance/response rates. Legacy single-question rows remain included and are identified in the methodology. AI findings reference existing question/comment IDs in the stored analysis; actions are labelled suggestions. Small samples are flagged. Do not treat automated findings as a substitute for reviewing the original feedback.
+
+No database migration is required. Reports use the existing PRIVATE AUDIO_BUCKET under analysis-reports/<event-namespace>/<snapshot-hash>/. Feedback rows are never updated by report generation. The report contains aggregate statistics and AI interpretations; its private saved analysis also includes redacted source comments. Downloads go through authenticated admin routes, not public signed links. Report snapshots are deliberately retained after feedback deletion, so a previous PDF remains a historical snapshot; use Check report status to see when feedback has changed.
+
+Each snapshot has a create-only durable claim, saved AI output, analysis JSON, a PDF, and metadata. Repeat requests for the same completed snapshot reuse the saved PDF. A PDF-render/storage failure can be retried from saved analysis without calling AI. A provider failure/timeout, interrupted invocation, or failure before analysis is safely stored leaves a claim and blocks automatic paid retries. An organizer must inspect the private claim/raw-analysis/analysis files to recover; do not simply remove the claim without checking whether the original call completed. A local or browser refresh never starts generation automatically. Generating a changed feedback snapshot requires explicit confirmation again.
+
+The one authorized live verification was run on October 18, 2026: 14 submissions, five PDF pages, one AI call. Usage: 2,372 input tokens and 584 output tokens, approximately $0.004407. The saved PDF was downloaded twice without another generation call. It is labelled TEST SNAPSHOT and is not the final event analysis. Do not rerun verify_report_once.py for another live test; its local receipt blocks repeats. Future event generation is via the admin button after collection ends.
+
+Deploy the new reportlab runtime dependency together with frontend and backend. Set the host's request timeout to allow the 75-second model request plus database/storage and rendering time; the endpoint is synchronous and does not provide a background queue. The durable claim prevents accidental duplicate charges even if the hosting request is interrupted, but recovery may require organizer inspection. Keep the Supabase bucket private and service key server-only.
+
+Offline checks: python -m pytest test_app.py test_reporting.py; node --test test_frontend.cjs test_admin.cjs. PDF tests use generated fixtures and mock AI calls. pypdf is a development dependency; reportlab is required in production.

@@ -10,6 +10,12 @@ if (token && homeLink) homeLink.href = '/?t=' + encodeURIComponent(token);
 let questions = [], index = 0, recorder = null, stream = null, chunks = [];
 let recording = null, playbackURL = null, timer = null, started = 0, submissionID = null;
 let transcribing = false;
+let speakerForm = false;
+let surveyRole = 'speaker';
+const speakerRatings = {};
+let speakerStep = -1;
+const speakerFields = [];
+function ratingsComplete() { return speakerForm ? Boolean($('workshop').value) && questions.every(q => q.required === false || speakerRatings[q.id]) : Boolean(rating); }
 let busy = false, requesting = false, ready = false, maxSeconds = 90, recordFailed = false, rating = 0, micReady = false, maxAudioBytes = 4_000_000;
 const ratingInputs = [...document.querySelectorAll('input[name="rating"]')];
 const formatTime = seconds => `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
@@ -26,11 +32,19 @@ function sync() {
   $('stop-icon').hidden = !active;
   $('participant-name').disabled = busy || Boolean(submissionID);
   ratingInputs.forEach(input => input.disabled = busy || Boolean(submissionID));
+  if (speakerForm) {
+    $('workshop').disabled = busy || Boolean(submissionID);
+    $('step-back').disabled = busy || transcribing || requesting || active || Boolean(submissionID);
+    $('step-continue').disabled = busy || Boolean(submissionID) || (speakerStep === -1
+      ? !$('participant-name').value.trim() || !$('workshop').value
+      : questions[speakerStep]?.required !== false && !speakerRatings[questions[speakerStep]?.id]);
+    document.querySelectorAll('#speaker-questions input').forEach(input => input.disabled = busy || Boolean(submissionID));
+  }
   $('redo').disabled = busy || transcribing || Boolean(submissionID);
   $('feedback-text').disabled = busy || transcribing || Boolean(submissionID);
   $('transcribe').disabled = !recording || busy || transcribing || Boolean(submissionID);
   $('transcribe').textContent = transcribing ? 'Transcribing…' : 'Create transcript';
-  $('send').disabled = !ready || !rating || !$('participant-name').value.trim() || busy || transcribing || active || requesting || (Boolean(recording) && !$('feedback-text').value.trim());
+  $('send').disabled = !ready || (speakerForm && speakerStep !== questions.length) || !ratingsComplete() || !$('participant-name').value.trim() || busy || transcribing || active || requesting || (Boolean(recording) && !$('feedback-text').value.trim());
   $('send').firstElementChild.textContent = busy ? 'Sending your feedback…' : 'Send my feedback';
 }
 function releaseMic() {
@@ -52,6 +66,12 @@ function clearRecording() {
 }
 function renderQuestion() {
   $('question').textContent = questions[index].en;
+  const labels = questions[index].scale_labels || ['Poor', 'Fair', 'Good', 'Great', 'Excellent'];
+  ratingInputs.forEach((input, i) => {
+    const label = input.parentElement?.querySelector('small');
+    if (label) label.textContent = labels[i] || '';
+    input.setAttribute('aria-label', `${i + 1}${labels[i] ? ' — ' + labels[i] : ''}`);
+  });
   $('progress').textContent = questions.length > 1 ? `QUESTION ${index + 1} OF ${questions.length}` : 'YOUR FEEDBACK';
 }
 function micError(error) {
@@ -141,11 +161,16 @@ async function transcribeRecording() {
   } finally { clearTimeout(timeout); transcribing = false; sync(); $('feedback-text').focus(); }
 }
 async function sendRecording() {
-  if (!ready || !rating || busy || transcribing || requesting || recorder?.state === 'recording' || !$('participant-name').value.trim() || (recording && !$('feedback-text').value.trim())) return;
+  if (!ready || (speakerForm && speakerStep !== questions.length) || !ratingsComplete() || busy || transcribing || requesting || recorder?.state === 'recording' || !$('participant-name').value.trim() || (recording && !$('feedback-text').value.trim())) return;
   submissionID ||= crypto.randomUUID();
   busy = true; $('playback').pause(); sync(); status('Saving your feedback…');
   const form = new FormData();
-  for (const [key, value] of Object.entries({token, question_id: questions[index].id, submission_id: submissionID, participant_name: $('participant-name').value.trim(), rating, feedback_text: $('feedback-text').value.trim(), consent: 'true'})) form.append(key, value);
+  for (const [key, value] of Object.entries({token, question_id: speakerForm ? surveyRole + '_form' : questions[index].id, submission_id: submissionID, participant_name: $('participant-name').value.trim(), rating, feedback_text: $('feedback-text').value.trim(), consent: 'true'})) form.append(key, value);
+  if (speakerForm) {
+    form.set('rating', String(speakerRatings[surveyRole === 'speaker' ? 'speaker_experience' : 'volunteer_delivery']));
+    form.append('workshop', $('workshop').value);
+    form.append('ratings', JSON.stringify(Object.fromEntries(questions.map(q => [q.id, speakerRatings[q.id] ?? null]))));
+  }
   try {
     const response = await fetch('/api/answer', {method: 'POST', body: form});
     const result = await response.json().catch(() => ({}));
@@ -153,7 +178,11 @@ async function sendRecording() {
     if (!result.saved) throw new Error('The server did not confirm your submission. Please try again.');
     $('form-panel').hidden = true; $('success').hidden = false;
     $('receipt').textContent = `Reference: ${result.id}`;
-    $('next').hidden = index + 1 >= questions.length;
+    $('next').hidden = speakerForm || index + 1 >= questions.length;
+    $('success-heading').textContent = !speakerForm && index + 1 < questions.length ? 'Rating received.' : 'Thank you for your feedback.';
+    $('success-message').textContent = !speakerForm && index + 1 < questions.length
+      ? `Your answer is saved. Continue to question ${index + 2} of ${questions.length}.`
+      : 'Your feedback is safely with the organizing team.';
     status(); $('feedback-text').value = '';
     clearRecording(); $('success').focus();
   } catch (error) {
@@ -168,13 +197,13 @@ $('send').addEventListener('click', sendRecording);
 $('participant-name').addEventListener('input', sync);
 ratingInputs.forEach(input => input.addEventListener('change', () => { rating = Number(input.value); sync(); }));
 $('next').addEventListener('click', () => {
-  index++; $('feedback-text').value = ''; rating = 0; ratingInputs.forEach(input => input.checked = false); clearRecording(); renderQuestion(); $('success').hidden = true; $('form-panel').hidden = false; status(); $('record').focus();
+  index++; $('feedback-text').value = ''; rating = 0; ratingInputs.forEach(input => input.checked = false); clearRecording(); renderQuestion(); $('success').hidden = true; $('form-panel').hidden = false; status(); $('question').focus();
 });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && recorder?.state === 'recording') recorder.stop();
 });
 window.addEventListener('beforeunload', event => {
-  if (recording || busy || transcribing || $('feedback-text').value.trim() || recorder?.state === 'recording') { event.preventDefault(); event.returnValue = ''; }
+  if ((speakerForm && Object.keys(speakerRatings).length && !$('form-panel').hidden) || recording || busy || transcribing || $('feedback-text').value.trim() || recorder?.state === 'recording') { event.preventDefault(); event.returnValue = ''; }
 });
 window.addEventListener('pagehide', releaseMic);
 (async () => {
@@ -188,10 +217,88 @@ window.addEventListener('pagehide', releaseMic);
     $('audience-heading').textContent = (result.audience_label || 'Participants').toUpperCase() + ' · FEEDBACK';
     $('intro').textContent = result.intro || $('intro').textContent;
     questions = result.questions; maxSeconds = result.max_seconds || 90;
-    maxAudioBytes = result.max_audio_bytes || 4_000_000; renderQuestion();
+    maxAudioBytes = result.max_audio_bytes || 4_000_000;
+    surveyRole = result.audience;
+    speakerForm = ['speaker', 'volunteer'].includes(surveyRole);
+    if (speakerForm) {
+      renderSpeakerForm(result.workshops || []);
+      if (surveyRole === 'volunteer') {
+        $('feedback-text').placeholder = 'Share other observations, excessive self-promotion, or suggestions for improvement…';
+      }
+    }
+    else renderQuestion();
     if (!token) throw new Error('This link is missing the event code. Please use the full feedback link or QR code from the organizer.');
     micReady = Boolean(window.isSecureContext && navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
     ready = true; sync();
     if (!micReady) status('Recording is unavailable in this browser. You can still send your rating. To record, use the HTTPS site or localhost in a supported browser.');
   } catch (error) { status(error.message, true); }
 })();
+
+function renderSpeakerForm(workshops) {
+  $('speaker-fields').hidden = false;
+  $('single-rating').hidden = true;
+  $('question').hidden = true;
+  $('speaker-navigation').hidden = false;
+  for (const name of workshops) {
+    const option = document.createElement('option'); option.value = name; option.textContent = name; $('workshop').append(option);
+  }
+  $('workshop').addEventListener('change', sync);
+  for (const [i, question] of questions.entries()) {
+    const field = document.createElement('fieldset'); field.className = 'rating-field survey-question';
+    const legend = document.createElement('legend');
+    if (question.section) {
+      const section = document.createElement('span'); section.className = 'question-section'; section.textContent = question.section; legend.append(section);
+    }
+    const title = document.createElement('span'); title.className = 'question-title'; title.textContent = question.en; legend.append(title);
+    field.append(legend);
+    const choices = document.createElement('div'); choices.className = question.options ? 'survey-choices' : 'rating-options';
+    for (const score of question.options || [1, 2, 3, 4, 5]) {
+      const label = document.createElement('label');
+      const input = document.createElement('input'); input.type = 'radio'; input.name = question.id; input.value = score; input.required = question.required !== false;
+      input.setAttribute('aria-label', `${score}${question.scale_labels?.[score - 1] ? ' — ' + question.scale_labels[score - 1] : ''}`);
+      input.addEventListener('change', () => {
+        speakerRatings[question.id] = score;
+        speakerStep = i + 1; renderSpeakerStep(true);
+      });
+      const span = document.createElement('span'); const number = document.createElement('b'); number.textContent = score;
+      const caption = document.createElement('small'); caption.textContent = question.scale_labels?.[score - 1] || '';
+      span.append(number, caption); label.append(input, span); choices.append(label);
+    }
+    field.append(choices); $('speaker-questions').append(field); speakerFields.push(field);
+    legend.tabIndex = -1;
+  }
+  $('step-skip').addEventListener('click', () => {
+    const question = questions[speakerStep];
+    if (question?.required !== false || busy || submissionID) return;
+    speakerRatings[question.id] = null;
+    for (const label of speakerFields[speakerStep].children[1].children) label.children[0].checked = false;
+    speakerStep++; renderSpeakerStep(true);
+  });
+  $('step-back').addEventListener('click', () => {
+    if (speakerStep >= 0) { speakerStep--; renderSpeakerStep(true); }
+  });
+  $('step-continue').addEventListener('click', () => {
+    if ($('step-continue').disabled) return;
+    if (speakerStep < questions.length) { speakerStep++; renderSpeakerStep(true); }
+  });
+  renderSpeakerStep();
+}
+
+function renderSpeakerStep(focus = false) {
+  const finalStep = speakerStep === questions.length;
+  speakerFields.forEach((field, i) => { field.hidden = i !== speakerStep; });
+  $('final-feedback').hidden = !finalStep;
+  $('step-back').hidden = speakerStep < 0;
+  $('step-skip').hidden = questions[speakerStep]?.required !== false;
+  $('step-skip').disabled = busy || Boolean(submissionID);
+  $('step-continue').hidden = finalStep;
+  $('step-continue').textContent = speakerStep < 0 ? 'Start ratings →' : 'Continue →';
+  $('progress').textContent = speakerStep < 0 ? (surveyRole === 'volunteer' ? 'YOUR SESSION EVALUATION' : 'YOUR SPEAKER FEEDBACK')
+    : finalStep ? 'RATINGS COMPLETE · OPTIONAL FEEDBACK' : `QUESTION ${speakerStep + 1} OF ${questions.length}`;
+  status(); sync();
+  if (focus) {
+    if (finalStep) $('feedback-text').focus();
+    else if (speakerStep >= 0) speakerFields[speakerStep].children[0].focus();
+    else $('participant-name').focus();
+  }
+}

@@ -5,3 +5,5 @@ supabase
 python-multipart
 python-dotenv
 google-genai
+
+reportlab>=4.4,<5
