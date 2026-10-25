@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#10144b">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml"><title>Your voice, our next spark · NASA Space Apps Cairo</title>
-  <link rel="stylesheet" href="/styles.css?v=bootcamp-required-8">
-  <script src="/app.js?v=bootcamp-required-8" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=bootcamp-choice-cards-local-12">
+  <script src="/app.js?v=bootcamp-choice-cards-local-12" defer></script>
 </head>
 <body>
   <div class="site-shell">
@@ -35,7 +35,7 @@
             <label><input type="radio" name="rating" value="4"><span><b>4</b><small>Great</small></span></label>
             <label><input type="radio" name="rating" value="5"><span><b>5</b><small>Excellent</small></span></label>
           </div></fieldset>
-          <div id="speaker-navigation" class="step-navigation" hidden><button id="step-back" class="text-button" type="button">← Back</button><button id="step-skip" class="text-button" type="button" hidden>Skip this question →</button><button id="step-continue" class="primary" type="button">Start ratings →</button></div>
+          <div id="speaker-navigation" class="step-navigation" hidden><button id="step-back" class="text-button" type="button">Back</button><button id="step-skip" class="text-button" type="button" hidden>Skip this question</button><button id="step-continue" class="primary" type="button">Start ratings</button></div>
           <div id="final-feedback"><div id="voice-panel">
           <div class="voice-heading"><h3>Record your experience</h3><span>Optional</span></div>
           <p class="language-note">English, Arabic, or a mix — all welcome.</p>
@@ -48,12 +48,12 @@
           <div id="preview" class="preview" hidden><label for="playback">Listen before you send</label><audio id="playback" controls preload="metadata"></audio><button id="transcribe" class="text-button" type="button">Create transcript</button><button id="redo" class="text-button" type="button">Discard recording</button></div>
           </div>
           <div class="text-feedback"><label for="feedback-text">Your feedback <span class="muted">(optional)</span></label><textarea id="feedback-text" rows="5" maxlength="10000" dir="auto" placeholder="Type here, or review and edit your transcript…"></textarea></div>
-          <p class="submission-notice">Send shares your name, answers, and feedback with the organizing team.</p><span id="provider-name" hidden></span>
+          <span id="provider-name" hidden></span>
           <p class="privacy-note" id="gemini-notice" hidden>Google’s free tier may use submissions to improve its products. Please avoid names and personal details in test recordings.</p>
           <button class="primary" type="button" id="send" disabled><span>Send my feedback</span><span aria-hidden="true"></span></button>
           </div>
         </div>
-        <div id="success" class="success" hidden tabindex="-1"><div class="success-spark" aria-hidden="true">✦</div><p class="eyebrow">MESSAGE RECEIVED</p><h2 id="success-heading">Thank you for your feedback.</h2><p id="success-message">Your feedback is safely with the organizing team.</p><button id="next" class="primary" hidden>Next question →</button><p class="receipt" id="receipt"></p></div>
+        <div id="success" class="success" hidden tabindex="-1"><div class="success-spark" aria-hidden="true">✦</div><p class="eyebrow">MESSAGE RECEIVED</p><h2 id="success-heading">Thank you for your feedback.</h2><p id="success-message">Your feedback is safely with the organizing team.</p><button id="next" class="primary" hidden>Next question</button><p class="receipt" id="receipt"></p></div>
         <p id="status" class="status" role="status" aria-live="polite"></p>
       </section>
     </main>

@@ -67,13 +67,6 @@ async function load(reset = true) {
       }
     } catch { /* Feedback remains accessible if link loading fails. */ }
 
-    try {
-      const check = await fetch('/api/admin/status', {headers: adminHeaders(password)});
-      if (check.ok) {
-        const state = await check.json();
-        $('provider-status').textContent = `Transcription: ${state.provider} / ${state.model}. ${state.key_configured ? 'Key configured.' : 'API key is missing.'} ${state.last_error || ''}`;
-      }
-    } catch { $('provider-status').textContent = 'Provider status unavailable.'; }
     if (reset) data = [];
     data.push(...result); offset = data.length; hasMore = result.length === 100;
     draw(); message('Feedback loaded. CSV files open in Excel and preserve Arabic text.');
@@ -120,8 +113,8 @@ async function refreshReport() {
     reportState = result;
     const saved = result.saved;
     $('report-info').textContent = saved
-      ? `Saved ${new Date(saved.generated_at).toLocaleString()} · ${saved.pages} pages · ${saved.responses} submissions${saved.test_run ? ' · Test snapshot' : ''}. ${result.changed ? 'Feedback has changed; the saved report is an older snapshot.' : 'This report matches the current feedback.'} AI usage estimate for the saved run: $${Number(saved.usage.estimated_usd).toFixed(4)}.`
-      : `${result.responses} submissions available. No saved report yet. ${result.can_generate ? 'Estimated AI cost ceiling: about $' + result.estimated_max_usd.toFixed(3) + ' for this snapshot.' : 'Collect feedback or reduce the dataset before generation.'}`;
+      ? (result.changed ? 'New feedback is available. You can generate an updated report.' : 'Your report is ready to download.')
+      : (result.can_generate ? 'Ready to generate your report.' : 'Collect feedback to generate a report.');
   } catch (error) { reportState = null; $('report-info').textContent = error.message; }
   buttons();
 }
@@ -131,7 +124,7 @@ $('report-status').addEventListener('click', async () => {
 });
 $('report-generate').addEventListener('click', async () => {
   if (reportBusy || !reportState?.can_generate || !password) return;
-  if (!window.confirm(`Generate analysis for all audiences using OpenAI API credits? Estimated ceiling: about $${reportState.estimated_max_usd.toFixed(3)}. Only generate again when you want a new feedback snapshot.`)) return;
+  if (!window.confirm('Generate an analysis report for all audiences?')) return;
   reportBusy = true; buttons(); $('report-info').textContent = 'Generating and saving the report. Keep this page open. Do not start another analysis.';
   try {
     const body = new FormData(); body.append('snapshot', reportState.snapshot); body.append('confirm_ai', 'true');

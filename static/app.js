@@ -272,7 +272,7 @@ function renderSpeakerForm(workshops) {
         const input = document.createElement('input'); input.type = 'radio'; input.name = question.id; input.value = score;
         input.addEventListener('change', () => { speakerRatings[question.id] = score; sync(); });
         const span = document.createElement('span'); const number = document.createElement('b'); number.textContent = score;
-        const caption = document.createElement('small'); caption.textContent = question.scale_labels?.[score - 1] || '';
+        const caption = document.createElement('small'); caption.textContent = ''; caption.hidden = true;
         span.append(number, caption); label.append(input, span); choices.append(label);
       }
       field.append(choices);
@@ -294,9 +294,9 @@ function renderSpeakerStep(focus = false) {
   $('step-back').hidden = speakerStep < 0;
   $('step-skip').hidden = true;
   $('step-continue').hidden = finalStep;
-  $('step-continue').textContent = speakerStep < 0 ? 'Start feedback →' : 'Next →';
+  $('step-continue').textContent = speakerStep < 0 ? 'Start feedback' : 'Next';
   $('progress').textContent = speakerStep < 0 ? 'SESSION DETAILS'
-    : finalStep ? 'OPTIONAL · YOUR OVERALL EXPERIENCE' : `SECTION ${speakerStep + 1} OF ${sections.length} · ${sections[speakerStep].title}`;
+    : finalStep ? 'OPTIONAL · YOUR OVERALL EXPERIENCE' : `Section ${speakerStep + 1} out of ${sections.length}`;
   status(); sync();
   if (focus) {
     if (finalStep) $('feedback-text').focus();
@@ -309,11 +309,20 @@ function createParagraph(field, question) {
   const text = document.createElement('textarea'); text.rows = 4; text.maxLength = 10000; text.dir = 'auto'; text.required = question.required !== false;
   text.setAttribute('aria-label', question.en); text.placeholder = 'Write your answer, or record and edit the transcript…';
   text.addEventListener('input', () => { speakerRatings[question.id] = text.value; sync(); });
-  const record = document.createElement('button'); record.type = 'button'; record.className = 'text-button'; record.textContent = 'Record answer (optional)';
+  const record = document.createElement('button'); record.type = 'button'; record.className = 'mic paragraph-mic';
+  function showRecordIcon(active = false) {
+    record.innerHTML = active
+      ? '<span class="paragraph-stop" aria-hidden="true"></span>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>';
+    record.setAttribute('aria-label', active ? 'Stop recording' : 'Record answer');
+    record.title = active ? 'Stop recording' : 'Record your answer (optional)';
+    record.classList.toggle('is-recording', active);
+  }
+  showRecordIcon();
   const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'text-button'; retry.textContent = 'Retry transcript'; retry.hidden = true;
   const discard = document.createElement('button'); discard.type = 'button'; discard.className = 'text-button'; discard.textContent = 'Discard recording'; discard.hidden = true;
   const audio = document.createElement('audio'); audio.controls = true; audio.hidden = true;
-  const note = document.createElement('p'); note.textContent = 'Answer required. Type your answer or record and review a transcript. Use N/A if this does not apply.'; note.className = 'language-note'; note.setAttribute('role', 'status');
+  const note = document.createElement('p'); note.textContent = 'Type your answer, or tap the microphone to record (optional). Your transcript appears automatically and can be edited.'; note.className = 'language-note'; note.setAttribute('role', 'status');
   let localRecorder, localStream, localChunks = [], blob, url, interval, startTime, failed = false;
   const finish = () => { clearInterval(interval); localStream?.getTracks().forEach(track => track.stop()); };
   async function transcribe() {
@@ -345,16 +354,16 @@ function createParagraph(field, question) {
       localRecorder.ondataavailable = event => { if (event.data.size) localChunks.push(event.data); };
       localRecorder.onerror = () => { failed = true; finish(); if (localRecorder.state !== 'inactive') localRecorder.stop(); };
       localRecorder.onstop = async () => {
-        finish(); paragraphActive = false; record.textContent = 'Record again'; record.disabled = false;
+        finish(); paragraphActive = false; showRecordIcon(); record.disabled = false;
         blob = new Blob(localChunks, {type: localRecorder.mimeType || localChunks[0]?.type || 'audio/webm'});
         if (failed || !blob.size || blob.size > maxAudioBytes || Date.now() - startTime < 1000) { blob = null; note.textContent = 'Please record between 1 and 90 seconds, within 4 MB.'; sync(); return; }
         if (url) URL.revokeObjectURL(url); url = URL.createObjectURL(blob); audio.src = url; audio.hidden = false; retry.hidden = false; discard.hidden = false;
         paragraphDrafts.set(question.id, true); sync();
         if (!text.value.trim()) await transcribe(); else note.textContent = 'Your typed answer is preserved. Use Retry transcript to replace it.';
       };
-      localRecorder.start(250); startTime = Date.now(); record.textContent = 'Stop recording'; record.disabled = false;
+      localRecorder.start(250); startTime = Date.now(); showRecordIcon(true); record.disabled = false;
       interval = setInterval(() => { const elapsed = Math.floor((Date.now() - startTime) / 1000); note.textContent = `Recording ${elapsed}s / ${maxSeconds}s`; if (elapsed >= maxSeconds && localRecorder.state === 'recording') localRecorder.stop(); }, 250);
-    } catch (error) { finish(); paragraphActive = false; record.disabled = false; note.textContent = micError(error); sync(); }
+    } catch (error) { finish(); paragraphActive = false; showRecordIcon(); record.disabled = false; note.textContent = micError(error); sync(); }
   });
   retry.addEventListener('click', transcribe);
   discard.addEventListener('click', () => { audio.pause(); audio.removeAttribute('src'); audio.load(); if (url) URL.revokeObjectURL(url); blob = null; url = null; paragraphDrafts.delete(question.id); audio.hidden = retry.hidden = discard.hidden = true; note.textContent = 'Recording discarded. Your text is preserved.'; });
