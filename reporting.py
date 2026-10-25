@@ -31,6 +31,29 @@ SHORT = {
     'volunteer_self_promotion': 'Excessive self-promotion',
 }
 
+# Concise chart captions; full question wording remains available in the CSV.
+SHORT.update({
+ 'speaker_objectives':'Objectives communicated', 'speaker_communication':'Pre-session coordination',
+ 'speaker_venue':'Venue readiness', 'speaker_room':'Room suitability', 'speaker_facilities':'Technical facilities',
+ 'speaker_support':'On-site volunteer support', 'speaker_outcomes':'Learning outcomes', 'speaker_experience':'Overall speaker experience',
+ 'volunteer_outline':'Agreed outline covered', 'volunteer_accuracy':'Accuracy & appropriate level',
+ 'volunteer_delivery':'Content structure & transitions', 'volunteer_slides':'Slide clarity',
+ 'volunteer_slide_support':'Slides supported explanation', 'volunteer_resources':'Examples & resources',
+ 'volunteer_professionalism':'Professionalism & preparation', 'volunteer_respect':'Respect for attendees',
+ 'volunteer_responsiveness':'Responsiveness to questions', 'volunteer_engagement':'Audience engagement',
+ 'volunteer_participation':'Meaningful participation', 'volunteer_goal':'Bootcamp goal alignment',
+ 'volunteer_challenges':'Hackathon connections', 'attendee_experience':'Overall session experience',
+ 'attendee_expectations':'Expectations met', 'attendee_relevance':'Challenge preparation',
+ 'attendee_clarity':'Clear explanations', 'attendee_engagement':'Engaging & interactive',
+ 'attendee_answers':'Responses to questions', 'attendee_content':'Content organization',
+ 'attendee_materials':'Helpful materials', 'attendee_practice':'Practical examples',
+ 'attendee_confidence':'Confidence applying learning', 'attendee_communication':'Session communication',
+ 'attendee_venue':'Physical environment', 'attendee_timing':'Session timing',
+ 'speaker_duration':'Allocated session time', 'volunteer_timing':'Planned content completed',
+ 'volunteer_concerns':'Follow-up concerns', 'volunteer_understanding':'Observed understanding',
+ 'attendee_pacing':'Speaker pacing', 'attendee_volunteers':'Volunteer helpfulness',
+})
+
 
 def fingerprint(rows):
     fields = ['id', 'created_at', 'ptype', 'question_id', 'rating', 'transcript', 'transcript_raw']
@@ -53,9 +76,13 @@ def build_statistics(rows, summarize):
             if summary['workshop']:
                 workshop_counts[summary['workshop']] += 1
             row_numbers = []
+            paragraph_ids = {q['id'] for q in config.audience_questions(role) if q.get('type') == 'paragraph'}
+            paragraph_text = []
             if values:
                 for key, value in values.items():
-                    if type(value) is int and 1 <= value <= 5:
+                    if key in paragraph_ids:
+                        if value: paragraph_text.append(labels.get(key, key) + ': ' + value)
+                    elif type(value) is int and 1 <= value <= 5:
                         numeric.setdefault(key, []).append(value)
                         distribution[value] += 1
                         row_numbers.append(value)
@@ -69,7 +96,7 @@ def build_statistics(rows, summarize):
                 legacy_count += 1
             if row_numbers:
                 form_averages.append(mean(row_numbers))
-            text = (row.get('transcript') or '').strip()
+            text = '\n\n'.join([*paragraph_text, (row.get('transcript') or '').strip()]).strip()
             if text:
                 # Do not send submitter identity or contact information to the model.
                 name = (row.get('participant_name') or '').strip()
@@ -226,11 +253,15 @@ def render_pdf(bundle):
             text(stat['distribution'][str(i)], x, 621, 26, 12, 7, gray)
             text(i, x + 4, 544, 20, 12, 8, navy, True)
         text('Individual 1-5 answers', 411, 525, 145, 22, 7, gray)
-        for i, choice in enumerate(stat['choices']):
-            y = 492 - i * 37
-            text(choice['label'], 411, y, 150, 18, 7.8, navy, True)
-            values = ' / '.join(f'{k} {v / choice["n"]:.0%} ({v})' for k, v in choice['counts'].items())
-            text(values, 411, y - 16, 150, 20, 7, gray)
+        choice_y = 510
+        for choice in stat['choices']:
+            text(choice['label'], 411, choice_y, 150, 12, 7, navy, True)
+            choice_y -= 14
+            for option, count in choice['counts'].items():
+                label = option if len(option) <= 24 else option[:21] + '...'
+                text(f'{label}: {count / choice["n"]:.0%} ({count})', 411, choice_y, 150, 9, 6.5, gray)
+                choice_y -= 8
+            choice_y -= 5
         text(notes['summary'], 34, 349, 525, 46, 10, navy)
         categories = [('strengths', 'WHAT WORKED WELL', '#E9F4F0'), ('improvements', 'NEEDS IMPROVEMENT', '#FFF0DC'), ('actions', 'SUGGESTED NEXT STEPS', '#E9EEFC')]
         for index, (key, title, color) in enumerate(categories):

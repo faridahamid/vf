@@ -15,8 +15,8 @@ def sample_rows():
     rows = []
     for role in config.AUDIENCES:
         for i in range(12):
-            scores = {q['id']: ('Maybe' if q.get('options') == ['Yes', 'No', 'Maybe'] else 'Yes' if 'options' in q else 3 + i % 3) for q in config.audience_questions(role)}
-            is_form = role in ('speaker', 'volunteer')
+            scores = {q['id']: ('Useful examples' if q.get('type') == 'paragraph' else q['options'][0] if 'options' in q else 3 + i % 3) for q in config.audience_questions(role)}
+            is_form = role in ('speaker', 'volunteer', 'attendee')
             rows.append({'id': str(uuid4()), 'created_at': '2026-10-18T12:00:00Z', 'participant_name': 'Private Person', 'ptype':role,
                          'question_id': role + '_form' if is_form else config.audience_questions(role)[0]['id'],
                          'rating': 3 + i % 3, 'transcript': 'Private Person: Great guidance. More time for questions please.',
@@ -54,20 +54,20 @@ class Storage:
         self.files[path] = data
 
 
-def test_statistics_and_five_page_layout():
+def test_statistics_and_audience_page_layout():
     bundle = sample_bundle()
     reporting.validate_notes(bundle['analysis'],bundle['statistics'])
     pdf = reporting.render_pdf(bundle)
     reader = PdfReader(io.BytesIO(pdf))
-    assert len(reader.pages) == 5
+    assert len(reader.pages) == len(config.AUDIENCES)
     for page, audience in zip(reader.pages, config.AUDIENCES.values()):
         assert audience['label'] in page.extract_text()
     assert 'Private Person' not in json.dumps(bundle['statistics'])
-    assert bundle['statistics']['volunteer']['rating_count'] == 120
+    assert bundle['statistics']['volunteer']['rating_count'] == 12 * sum(q.get('rating', False) for q in config.VOLUNTEER_QUESTIONS)
     assert bundle['statistics']['volunteer']['average'] == 4
     empty = reporting.build_statistics([],main.feedback_summary)
     bundle.update(statistics=empty,analysis=fake_notes(empty))
-    assert len(PdfReader(io.BytesIO(reporting.render_pdf(bundle))).pages)==5
+    assert len(PdfReader(io.BytesIO(reporting.render_pdf(bundle))).pages)==len(config.AUDIENCES)
 
 
 def test_report_auth_cache_staleness_and_repeated_downloads(setup,monkeypatch):

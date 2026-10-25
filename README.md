@@ -144,3 +144,12 @@ The one authorized live verification was run on October 18, 2026: 14 submissions
 Deploy the new reportlab runtime dependency together with frontend and backend. Set the host's request timeout to allow the 75-second model request plus database/storage and rendering time; the endpoint is synchronous and does not provide a background queue. The durable claim prevents accidental duplicate charges even if the hosting request is interrupted, but recovery may require organizer inspection. Keep the Supabase bucket private and service key server-only.
 
 Offline checks: python -m pytest test_app.py test_reporting.py; node --test test_frontend.cjs test_admin.cjs. PDF tests use generated fixtures and mock AI calls. pypdf is a development dependency; reportlab is required in production.
+
+
+## Bootcamp section forms (October 2026)
+
+Speakers, organizing volunteers, and workshop attendees now use the questionnaires from the three supplied Bootcamp PDFs. The admin link list includes a separate **Workshop attendees** link, alongside the existing participant link. Each link selects its own form through the audience token; no database migration is required.
+
+Session details come first, followed by the PDF sections with all questions visible together. Selecting a rating never advances the page. Next validates the current section; Back preserves answers. Speaker names are typed only. Every paragraph question requires an answer; recording is optional. Each question has its own text box, recorder, playback, automatic transcription, retry, and discard controls. Edited text is submitted with that question. Recordings remain temporary; only the final text is saved.
+
+After the PDF sections, an optional overall experience page allows writing or recording and editing a transcript before Send. Each complete form is saved atomically as one response. Admin and CSV exports include the individual answers, workshop, speaker name, and overall comments. Existing saved forms remain readable.

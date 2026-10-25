@@ -177,7 +177,7 @@ def validate_filter(audience):
 def cfg(t: str = ""):
     role = resolve_audience(t) if t else "participant"
     audience = config.AUDIENCES[role]
-    return {"questions": config.audience_questions(role), "workshops": config.WORKSHOPS if role in ("speaker", "volunteer") else [], "audience": role, "audience_label": audience["label"], "intro": audience["intro"], "is_test": IS_TEST, "max_seconds": 90, "max_audio_bytes": MAX_AUDIO_BYTES,
+    return {"questions": config.audience_questions(role), "workshops": config.WORKSHOPS if role in ("speaker", "volunteer", "attendee") else [], "audience": role, "audience_label": audience["label"], "intro": audience["intro"], "is_test": IS_TEST, "max_seconds": 90, "max_audio_bytes": MAX_AUDIO_BYTES,
             "transcription_provider": "Google Gemini" if config.PROVIDER == "gemini" else "OpenAI",
             "gemini_test_notice": config.PROVIDER == "gemini" and IS_TEST}
 
@@ -227,7 +227,7 @@ def preview_transcription(request: Request, token: str = Form(...), audio: Uploa
 def answer(request: Request, token: str = Form(...), question_id: str = Form(...),
            submission_id: UUID = Form(...), participant_name: str = Form(...),
            rating: int | None = Form(None), consent: bool = Form(False),
-           feedback_text: str = Form(""), workshop: str = Form(""), ratings: str = Form(""), audio: UploadFile | None = File(None)):
+           feedback_text: str = Form(""), workshop: str = Form(""), ratings: str = Form(""), speaker_name: str = Form(""), audio: UploadFile | None = File(None)):
     role = resolve_audience(token)
     if not consent:
         raise HTTPException(400, "Please agree to share your feedback.")
@@ -236,7 +236,7 @@ def answer(request: Request, token: str = Form(...), question_id: str = Form(...
         raise HTTPException(409, "This page is outdated. Refresh to review your transcript before sending. Audio is no longer saved.")
     survey = None
     if ratings:
-        if role not in ("speaker", "volunteer") or question_id != role + "_form":
+        if role not in ("speaker", "volunteer", "attendee") or question_id != role + "_form":
             raise HTTPException(400, "Unknown feedback form.")
         try:
             scores = json.loads(ratings)
@@ -250,16 +250,21 @@ def answer(request: Request, token: str = Form(...), question_id: str = Form(...
             value = scores[question["id"]]
             if value is None and not question.get("required", True):
                 continue
-            if "options" in question:
+            if question.get("type") == "paragraph":
+                valid = isinstance(value, str) and bool(value.strip()) and len(value) <= 10000
+            elif "options" in question:
                 valid = isinstance(value, str) and value in question["options"]
             else:
                 valid = type(value) is int and 1 <= value <= 5
             if not valid:
-                raise HTTPException(400, "Please answer all required questions with a valid rating or choice.")
+                raise HTTPException(400, "Please answer every required question. Paragraph answers cannot be blank.")
         if workshop not in config.WORKSHOPS:
             raise HTTPException(400, "Please select a workshop.")
-        rating = scores["speaker_experience" if role == "speaker" else "volunteer_delivery"]
-        survey = {"kind": role + "_form", "workshop": workshop, "ratings": scores}
+        rating = scores[{"speaker": "speaker_experience", "volunteer": "volunteer_delivery", "attendee": "attendee_experience"}[role]]
+        speaker_name = speaker_name.strip()
+        if role != "speaker" and (not speaker_name or len(speaker_name) > 120):
+            raise HTTPException(400, "Please enter the speaker name (up to 120 characters).")
+        survey = {"kind": role + "_form", "workshop": workshop, "ratings": scores, "speaker_name": speaker_name}
     if not survey and question_id not in {q["id"] for q in config.audience_questions(role)}:
         raise HTTPException(400, "Unknown question. Refresh the page and try again.")
     if rating is None or not 1 <= rating <= 5:
@@ -358,16 +363,21 @@ VOLUNTEER_SCORE_LABELS = {q["id"]: q["en"] for q in config.VOLUNTEER_QUESTIONS}
 
 def feedback_summary(row):
     summary = {"workshop": "", "average_rating": None, "scores": {}, "score_labels": {}}
-    role = {"speaker_form": "speaker", "volunteer_form": "volunteer"}.get(row.get("question_id"))
+    role = {"speaker_form": "speaker", "volunteer_form": "volunteer", "attendee_form": "attendee"}.get(row.get("question_id"))
     if not role:
         return summary
     try:
         survey = json.loads(row.get("transcript_raw") or "{}")
         scores = survey["ratings"]
         values = []
-        for question in config.audience_questions(role):
+        form_questions = config.audience_questions(role)
+        if set(scores) == {q["id"] for q in config.LEGACY_FORM_QUESTIONS.get(role, [])}:
+            form_questions = config.LEGACY_FORM_QUESTIONS[role]
+        for question in form_questions:
             value = scores[question["id"]]
             if value is None and not question.get("required", True):
+                continue
+            if question.get("type") == "paragraph":
                 continue
             if "options" in question:
                 if value not in question["options"]:
@@ -376,9 +386,9 @@ def feedback_summary(row):
                 values.append(value)
             else:
                 return summary
-        labels = SPEAKER_SCORE_LABELS if role == "speaker" else VOLUNTEER_SCORE_LABELS
+        labels = {q["id"]: q["en"] for q in form_questions if q["id"] in scores}
         summary.update(workshop=survey.get("workshop", ""), average_rating=round(sum(values) / len(values), 1),
-                       scores={key: scores[key] for key in labels}, score_labels=labels)
+                       scores={key: scores[key] for key in labels}, score_labels=labels, speaker_name=survey.get("speaker_name", ""))
     except (ValueError, KeyError, TypeError, AttributeError, ZeroDivisionError):
         pass
     return summary
@@ -395,12 +405,8 @@ def export(request: Request, x_admin_password: str = Header(None), x_admin_passw
     limit("export:" + (request.client.host if request.client else "unknown"), 60)
     check_admin(x_admin_password, x_admin_password_encoding)
     validate_filter(audience)
-    score_columns = []
-    if not audience or audience == "speaker":
-        score_columns.extend(SPEAKER_SCORE_LABELS.items())
-    if not audience or audience == "volunteer":
-        score_columns.extend(VOLUNTEER_SCORE_LABELS.items())
-    columns = [("participant_name", "Name"), ("workshop", "Workshop"), ("average_rating", "Average rating (1-5)"),
+    score_columns = [(q["id"], q["en"]) for role in ("speaker", "volunteer", "attendee") if not audience or audience == role for q in config.audience_questions(role)]
+    columns = [("participant_name", "Name"), ("speaker_name", "Speaker name"), ("workshop", "Workshop"), ("average_rating", "Average rating (1-5)"),
                *score_columns, ("transcript", "Comments"), ("ptype", "Audience"),
                ("created_at", "Received"), ("question", "Question"), ("rating", "Single / overall rating (1-5)"),
                ("id", "Response ID")]
@@ -422,8 +428,8 @@ def export(request: Request, x_admin_password: str = Header(None), x_admin_passw
                 summary = feedback_summary(row)
                 row.update(summary)
                 row.update(summary["scores"])
-                if row["question_id"] in ("speaker_form", "volunteer_form"):
-                    row["question"] = "Speaker feedback form" if row["question_id"] == "speaker_form" else "Volunteer session evaluation"
+                if row["question_id"] in ("speaker_form", "volunteer_form", "attendee_form"):
+                    row["question"] = {"speaker_form": "Speaker feedback form", "volunteer_form": "Volunteer session evaluation", "attendee_form": "Workshop attendee feedback"}[row["question_id"]]
                 writer.writerow([safe_cell(row.get(key)) for key, _ in columns])
             if len(batch) < 1000:
                 break

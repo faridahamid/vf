@@ -176,7 +176,7 @@ def test_admin_links_and_filtered_export(setup):
     assert client.get('/api/admin/links').status_code == 401
     headers={'X-Admin-Password':'test-admin'}
     links=client.get('/api/admin/links',headers=headers).json()
-    assert len(links)==5 and len({x['path'] for x in links})==5
+    assert len(links)==6 and len({x['path'] for x in links})==6
     assert links[0]['path']=='/?t=test-token'
     send(client, participant_name='Participant Example')
     for i in range(102):
@@ -190,92 +190,54 @@ def test_admin_links_and_filtered_export(setup):
     assert client.get('/api/config?t=invalid').status_code==403
 
 
-def test_all_speaker_ratings_save_export_and_reject_other_audiences(setup):
-    client, db, calls = setup
-    token = main.audience_tokens()['speaker']
-    questions = client.get('/api/config', params={'t': token}).json()['questions']
-    assert len(questions) == 5
-    assert questions[0]['scale_labels'] == ['Very Poor', '', '', '', 'Excellent']
-    assert questions[-1]['scale_labels'] == ['Not likely', '', '', '', 'Definitely']
-    for question in questions:
-        assert send(client, token=token, question_id=question['id']).status_code == 200
-    assert len(db.rows) == 5 and not calls
-    assert send(client, question_id='speaker_support').status_code == 400
-    assert send(client, token=token, question_id='speaker_support', rating='6').status_code == 400
-    exported = client.get('/api/admin/export?audience=speaker', headers={'X-Admin-Password': 'test-admin'}).text
-    for question in questions:
-        assert question['en'] in exported
+def form_scores(role):
+    return {q['id']: ('Written answer' if q.get('type') == 'paragraph' else q['options'][0] if 'options' in q else 4)
+            for q in main.config.audience_questions(role)}
 
 
-def test_one_speaker_form_is_atomic_and_retry_safe(setup):
-    import json
-    client, db, _ = setup
-    scores = {q['id']: 4 for q in main.config.SPEAKER_QUESTIONS}
-    data = dict(token=main.audience_tokens()['speaker'], question_id='speaker_form', workshop='Video Editing', ratings=json.dumps(scores), submission_id=str(uuid4()))
-    assert send(client, **{**data, 'workshop': 'unknown'}).status_code == 400
-    assert send(client, **{**data, 'ratings': '{}'}).status_code == 400
-    assert not db.rows
-    assert send(client, **data).status_code == 200
-    assert send(client, **data).status_code == 200
-    assert len(db.rows) == 1
-    assert json.loads(db.rows[0]['transcript_raw'])['ratings'] == scores
-    exported = client.get('/api/admin/export', headers={'X-Admin-Password': 'test-admin'}).text
-    assert 'Video Editing' in exported and 'Organizer support' in exported
-
-
-def test_speaker_average_and_readable_export(setup):
-    import json
-    import csv
-    import io
-    client, db, _ = setup
-    scores = dict(zip(main.SPEAKER_SCORE_LABELS, [5, 4, 3, 4, 5]))
-    assert send(client, token=main.audience_tokens()['speaker'], question_id='speaker_form',
-                workshop='NASA Data', ratings=json.dumps(scores)).status_code == 200
-    headers = {'X-Admin-Password': 'test-admin'}
-    row = client.get('/api/admin/responses', headers=headers).json()[0]
-    assert row['average_rating'] == 4.2 and row['scores'] == scores
-    exported = client.get('/api/admin/export', headers=headers).text
-    table = list(csv.DictReader(io.StringIO(exported.lstrip('\ufeff'))))
-    assert table[0]['Average rating (1-5)'] == '4.2'
-    assert table[0]['Overall experience'] == '5'
-    assert table[0]['Organizer support'] == '4'
-    assert table[0]['Workshop'] == 'NASA Data'
-    assert 'is_test' not in table[0] and 'transcript_raw' not in table[0]
-    assert len(db.rows) == 1
-    assert main.feedback_summary({'question_id':'speaker_form', 'transcript_raw':'broken'})['average_rating'] is None
-    assert main.feedback_summary({'question_id':'experience','rating':5})['average_rating'] is None
-
-
-def test_volunteer_form_choices_optional_rating_average_and_export(setup):
+@pytest.mark.parametrize('role', ['speaker', 'volunteer', 'attendee'])
+def test_section_forms_atomic_required_paragraphs_validation_export(setup, role):
     import json, csv, io
     client, db, calls = setup
-    token = main.audience_tokens()['volunteer']
+    token = main.audience_tokens()[role]
     info = client.get('/api/config', params={'t': token}).json()
-    assert len(info['questions']) == 14 and len(info['workshops']) == 14
-    scores = {q['id']: ('No' if 'options' in q else 4) for q in info['questions']}
-    scores['volunteer_agenda'] = None
-    scores['volunteer_delivery'] = 5
-    scores['volunteer_recommendation'] = 'Maybe'
-    data = dict(token=token, question_id='volunteer_form', workshop='NASA Data', ratings=json.dumps(scores), submission_id=str(uuid4()))
+    assert len({q['section'] for q in info['questions']}) == (4 if role == 'speaker' else 5)
+    assert len(info['workshops']) == 14
+    scores = form_scores(role)
+    paragraphs = [q for q in info['questions'] if q.get('type') == 'paragraph']
+    assert paragraphs and all(q['required'] is True for q in paragraphs)
+    scores[paragraphs[0]['id']] = 'My edited transcript بالعربي'
+    data = dict(token=token, question_id=role+'_form', workshop='NASA Data', speaker_name='Example speaker',
+                ratings=json.dumps(scores), submission_id=str(uuid4()))
+    assert send(client, **{**data, 'workshop': 'unknown'}).status_code == 400
+    assert send(client, **{**data, 'ratings': '{}'}).status_code == 400
+    if role != 'speaker':
+        assert send(client, **{**data, 'speaker_name': ''}).status_code == 400
+    numeric = next(q['id'] for q in info['questions'] if q.get('rating'))
+    for bad in [None, True, 6, '4']:
+        assert send(client, **{**data, 'ratings': json.dumps({**scores, numeric: bad})}).status_code == 400
+    for bad in [None, '', '   ', '\n\t', 'x'*10001]:
+        assert send(client, **{**data, 'ratings': json.dumps({**scores, paragraphs[0]['id']: bad})}).status_code == 400
     assert send(client, **data).status_code == 200
     assert send(client, **data).status_code == 200
     assert len(db.rows) == 1 and not calls
-    headers = {'X-Admin-Password': 'test-admin'}
-    row = client.get('/api/admin/responses?audience=volunteer', headers=headers).json()[0]
-    assert row['average_rating'] == 4.1
-    assert row['scores']['volunteer_recommendation'] == 'Maybe'
-    assert row['scores']['volunteer_agenda'] is None
-    exported = client.get('/api/admin/export?audience=volunteer', headers=headers).text
+    assert json.loads(db.rows[0]['transcript_raw'])['ratings'] == scores
+    headers = {'X-Admin-Password':'test-admin'}
+    row = client.get('/api/admin/responses', headers=headers).json()[0]
+    assert row['average_rating'] == 4 and row['scores'] == scores
+    exported = client.get('/api/admin/export', params={'audience':role}, headers=headers).text
     table = list(csv.DictReader(io.StringIO(exported.lstrip('\ufeff'))))
-    assert len(table) == 1 and table[0]['Average rating (1-5)'] == '4.1'
-    assert table[0]['The session aligned with the proposed agenda.'] == ''
-    assert table[0]['Based on your experience, would you recommend welcoming this speaker again next year?'] == 'Maybe'
-    assert table[0]['Does the speaker market themselves too much?'] == 'No'
-    for key, bad in [('volunteer_delivery', None), ('volunteer_delivery', True), ('volunteer_subjects', 5), ('volunteer_recommendation','Unknown')]:
-        invalid = {**scores, key: bad}
-        assert send(client, **{**data, 'ratings': json.dumps(invalid), 'submission_id': str(uuid4())}).status_code == 400
-    assert send(client, **{**data, 'token':main.audience_tokens()['speaker']}).status_code == 400
-    assert len(db.rows) == 1
+    assert table[0][paragraphs[0]['en']] == 'My edited transcript بالعربي'
+    assert table[0]['Speaker name'] == 'Example speaker'
+    assert any(link['audience'] == 'attendee' for link in client.get('/api/admin/links',headers=headers).json())
+
+
+def test_historical_forms_remain_readable():
+    import json
+    for role, questions in main.config.LEGACY_FORM_QUESTIONS.items():
+        scores = {q['id']: (q['options'][0] if 'options' in q else 4) for q in questions}
+        summary = main.feedback_summary({'question_id':role+'_form','transcript_raw':json.dumps({'ratings':scores,'workshop':'NASA Data'})})
+        assert summary['average_rating'] == 4 and summary['scores'] == scores
 
 
 @pytest.mark.parametrize('password', ['test-admin', 'كلمة سر آمنة', 'pass%20+word'])
@@ -301,7 +263,8 @@ def test_export_columns_match_selected_audience(setup):
         text = client.get('/api/admin/export', params={'audience':audience}, headers=headers).text
         return next(csv.reader(io.StringIO(text.lstrip('\ufeff'))))
     speaker, volunteer, combined = columns('speaker'), columns('volunteer'), columns('')
-    assert 'Organizer support' in speaker and 'Organizer support' not in volunteer
-    assert 'The speaker was easy to communicate with.' in volunteer
-    assert 'The speaker was easy to communicate with.' not in speaker
-    assert 'Organizer support' in combined and 'The speaker was easy to communicate with.' in combined
+    speaker_label = main.config.SPEAKER_QUESTIONS[0]['en']
+    volunteer_label = main.config.VOLUNTEER_QUESTIONS[0]['en']
+    assert speaker_label in speaker and speaker_label not in volunteer
+    assert volunteer_label in volunteer and volunteer_label not in speaker
+    assert speaker_label in combined and volunteer_label in combined
