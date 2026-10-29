@@ -236,7 +236,7 @@ def answer(request: Request, token: str = Form(...), question_id: str = Form(...
         raise HTTPException(409, "This page is outdated. Refresh to review your transcript before sending. Audio is no longer saved.")
     survey = None
     if ratings:
-        if role not in ("speaker", "volunteer", "attendee") or question_id != role + "_form":
+        if role not in ("participant", "speaker", "volunteer", "attendee") or question_id != role + "_form":
             raise HTTPException(400, "Unknown feedback form.")
         try:
             scores = json.loads(ratings)
@@ -248,21 +248,26 @@ def answer(request: Request, token: str = Form(...), question_id: str = Form(...
             raise HTTPException(400, "Please answer all required questions.")
         for question in form_questions:
             value = scores[question["id"]]
+            condition = question.get("condition")
+            if condition and scores.get(condition["id"]) != condition["value"]:
+                if value is not None:
+                    raise HTTPException(400, "Please refresh your answers for the attendance questions.")
+                continue
             if value is None and not question.get("required", True):
                 continue
             if question.get("type") == "paragraph":
                 valid = isinstance(value, str) and bool(value.strip()) and len(value) <= 10000
             elif "options" in question:
-                valid = isinstance(value, str) and value in question["options"]
+                valid = type(value) in (int, str) and value in question["options"]
             else:
                 valid = type(value) is int and 1 <= value <= 5
             if not valid:
                 raise HTTPException(400, "Please answer every required question. Paragraph answers cannot be blank.")
-        if workshop not in config.WORKSHOPS:
+        if role != "participant" and workshop not in config.WORKSHOPS:
             raise HTTPException(400, "Please select a workshop.")
-        rating = scores[{"speaker": "speaker_experience", "volunteer": "volunteer_delivery", "attendee": "attendee_experience"}[role]]
+        rating = scores[{"participant": "experience", "speaker": "speaker_experience", "volunteer": "volunteer_delivery", "attendee": "attendee_experience"}[role]]
         speaker_name = speaker_name.strip()
-        if role != "speaker" and (not speaker_name or len(speaker_name) > 120):
+        if role not in ("participant", "speaker") and (not speaker_name or len(speaker_name) > 120):
             raise HTTPException(400, "Please enter the speaker name (up to 120 characters).")
         survey = {"kind": role + "_form", "workshop": workshop, "ratings": scores, "speaker_name": speaker_name}
     if not survey and question_id not in {q["id"] for q in config.audience_questions(role)}:
@@ -363,7 +368,7 @@ VOLUNTEER_SCORE_LABELS = {q["id"]: q["en"] for q in config.VOLUNTEER_QUESTIONS}
 
 def feedback_summary(row):
     summary = {"workshop": "", "average_rating": None, "scores": {}, "score_labels": {}}
-    role = {"speaker_form": "speaker", "volunteer_form": "volunteer", "attendee_form": "attendee"}.get(row.get("question_id"))
+    role = {"participant_form": "participant", "speaker_form": "speaker", "volunteer_form": "volunteer", "attendee_form": "attendee"}.get(row.get("question_id"))
     if not role:
         return summary
     try:
@@ -375,6 +380,9 @@ def feedback_summary(row):
             form_questions = config.LEGACY_FORM_QUESTIONS[role]
         for question in form_questions:
             value = scores[question["id"]]
+            condition = question.get("condition")
+            if condition and scores.get(condition["id"]) != condition["value"]:
+                continue
             if value is None and not question.get("required", True):
                 continue
             if question.get("type") == "paragraph":
@@ -382,6 +390,8 @@ def feedback_summary(row):
             if "options" in question:
                 if value not in question["options"]:
                     return summary
+                if type(value) is int:
+                    values.append(value)
             elif type(value) is int and 1 <= value <= 5:
                 values.append(value)
             else:
@@ -405,7 +415,7 @@ def export(request: Request, x_admin_password: str = Header(None), x_admin_passw
     limit("export:" + (request.client.host if request.client else "unknown"), 60)
     check_admin(x_admin_password, x_admin_password_encoding)
     validate_filter(audience)
-    score_columns = [(q["id"], q["en"]) for role in ("speaker", "volunteer", "attendee") if not audience or audience == role for q in config.audience_questions(role)]
+    score_columns = [(q["id"], q["en"]) for role in ("participant", "speaker", "volunteer", "attendee") if not audience or audience == role for q in config.audience_questions(role)]
     columns = [("participant_name", "Name"), ("speaker_name", "Speaker name"), ("workshop", "Workshop"), ("average_rating", "Average rating (1-5)"),
                *score_columns, ("transcript", "Comments"), ("ptype", "Audience"),
                ("created_at", "Received"), ("question", "Question"), ("rating", "Single / overall rating (1-5)"),
@@ -428,8 +438,8 @@ def export(request: Request, x_admin_password: str = Header(None), x_admin_passw
                 summary = feedback_summary(row)
                 row.update(summary)
                 row.update(summary["scores"])
-                if row["question_id"] in ("speaker_form", "volunteer_form", "attendee_form"):
-                    row["question"] = {"speaker_form": "Speaker feedback form", "volunteer_form": "Volunteer session evaluation", "attendee_form": "Workshop attendee feedback"}[row["question_id"]]
+                if row["question_id"] in ("participant_form", "speaker_form", "volunteer_form", "attendee_form"):
+                    row["question"] = {"participant_form": "General participant feedback", "speaker_form": "Speaker feedback form", "volunteer_form": "Volunteer session evaluation", "attendee_form": "Workshop attendee feedback"}[row["question_id"]]
                 writer.writerow([safe_cell(row.get(key)) for key, _ in columns])
             if len(batch) < 1000:
                 break

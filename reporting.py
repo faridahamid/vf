@@ -54,6 +54,8 @@ SHORT.update({
  'attendee_pacing':'Speaker pacing', 'attendee_volunteers':'Volunteer helpfulness',
 })
 
+SHORT.update({'participant_opening':'Opening ceremony','participant_vip':'VIP talks','participant_communication':'Event communication','participant_organizers':'Organizer helpfulness','participant_workshop_enjoyment':'Workshop enjoyment','participant_workshop_usefulness':'Workshop usefulness','participant_workshop_slots':'Workshop scheduling preference','participant_workshop_access':'Workshop schedule access','experience':'Overall event experience'})
+
 
 def fingerprint(rows):
     fields = ['id', 'created_at', 'ptype', 'question_id', 'rating', 'transcript', 'transcript_raw']

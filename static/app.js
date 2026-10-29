@@ -19,9 +19,11 @@ let sections = [];
 let paragraphActive = false;
 const paragraphDrafts = new Map();
 const paragraphCleanups = [];
-function answerComplete(q) { const value = speakerRatings[q.id]; return q.required === false || (q.type === 'paragraph' ? typeof value === 'string' && Boolean(value.trim()) : Boolean(value)); }
+function questionVisible(q) { return !q.condition || speakerRatings[q.condition.id] === q.condition.value; }
+function refreshConditionalQuestions() { questions.forEach((q, i) => { if (speakerFields[i]) speakerFields[i].hidden = !questionVisible(q); }); }
+function answerComplete(q) { if (!questionVisible(q)) return true; const value = speakerRatings[q.id]; return q.required === false || (q.type === 'paragraph' ? typeof value === 'string' && Boolean(value.trim()) : Boolean(value)); }
 function sectionComplete() { return (sections[speakerStep]?.questions || []).every(answerComplete); }
-function ratingsComplete() { return speakerForm ? Boolean($('workshop').value) && questions.every(answerComplete) : Boolean(rating); }
+function ratingsComplete() { return speakerForm ? (surveyRole === 'participant' || Boolean($('workshop').value)) && questions.every(answerComplete) : Boolean(rating); }
 let busy = false, requesting = false, ready = false, maxSeconds = 90, recordFailed = false, rating = 0, micReady = false, maxAudioBytes = 4_000_000;
 const ratingInputs = [...document.querySelectorAll('input[name="rating"]')];
 const formatTime = seconds => `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
@@ -42,7 +44,7 @@ function sync() {
     $('workshop').disabled = busy || Boolean(submissionID);
     $('step-back').disabled = busy || transcribing || requesting || active || paragraphActive || Boolean(submissionID);
     $('step-continue').disabled = busy || transcribing || requesting || active || paragraphActive || Boolean(submissionID) || (speakerStep === -1
-      ? !$('participant-name').value.trim() || !$('workshop').value || (surveyRole !== 'speaker' && !$('speaker-name').value.trim())
+      ? !$('participant-name').value.trim() || (surveyRole !== 'participant' && (!$('workshop').value || (surveyRole !== 'speaker' && !$('speaker-name').value.trim())))
       : !sectionComplete());
     document.querySelectorAll('#speaker-questions input').forEach(input => input.disabled = busy || Boolean(submissionID));
   }
@@ -173,10 +175,10 @@ async function sendRecording() {
   const form = new FormData();
   for (const [key, value] of Object.entries({token, question_id: speakerForm ? surveyRole + '_form' : questions[index].id, submission_id: submissionID, participant_name: $('participant-name').value.trim(), rating, feedback_text: $('feedback-text').value.trim(), consent: 'true'})) form.append(key, value);
   if (speakerForm) {
-    form.set('rating', String(speakerRatings[({speaker: 'speaker_experience', volunteer: 'volunteer_delivery', attendee: 'attendee_experience'})[surveyRole]]));
+    form.set('rating', String(speakerRatings[({participant: 'experience', speaker: 'speaker_experience', volunteer: 'volunteer_delivery', attendee: 'attendee_experience'})[surveyRole]]));
     form.append('workshop', $('workshop').value);
     form.append('speaker_name', $('speaker-name').value.trim());
-    form.append('ratings', JSON.stringify(Object.fromEntries(questions.map(q => [q.id, speakerRatings[q.id] ?? null]))));
+    form.append('ratings', JSON.stringify(Object.fromEntries(questions.map(q => [q.id, questionVisible(q) ? speakerRatings[q.id] ?? null : null]))));
   }
   try {
     const response = await fetch('/api/answer', {method: 'POST', body: form});
@@ -226,7 +228,7 @@ window.addEventListener('pagehide', releaseMic);
     questions = result.questions; maxSeconds = result.max_seconds || 90;
     maxAudioBytes = result.max_audio_bytes || 4_000_000;
     surveyRole = result.audience;
-    speakerForm = ['speaker', 'volunteer', 'attendee'].includes(surveyRole);
+    speakerForm = ['speaker', 'volunteer', 'attendee'].includes(surveyRole) || (surveyRole === 'participant' && questions.some(q => q.section));
     if (speakerForm) {
       renderSpeakerForm(result.workshops || []);
       if (surveyRole === 'volunteer') {
@@ -247,7 +249,7 @@ function renderSpeakerForm(workshops) {
   $('single-rating').hidden = true;
   $('question').hidden = true;
   $('speaker-navigation').hidden = false;
-  $('speaker-name-field').hidden = surveyRole === 'speaker';
+  $('speaker-name-field').hidden = ['speaker', 'participant'].includes(surveyRole);
   $('speaker-name').addEventListener('input', sync);
   for (const name of workshops) {
     const option = document.createElement('option'); option.value = name; option.textContent = name; $('workshop').append(option);
@@ -263,6 +265,7 @@ function renderSpeakerForm(workshops) {
     section.questions.push(question);
     const field = document.createElement('fieldset'); field.className = 'rating-field survey-question';
     const legend = document.createElement('legend'); legend.textContent = question.en + (question.required === false ? ' (optional)' : ''); field.append(legend);
+    if (question.help) { const hint = document.createElement('p'); hint.className = 'language-note'; hint.textContent = question.help; field.append(hint); }
     if (question.type === 'paragraph') {
       createParagraph(field, question);
     } else {
@@ -270,7 +273,7 @@ function renderSpeakerForm(workshops) {
       for (const score of question.options || [1, 2, 3, 4, 5]) {
         const label = document.createElement('label');
         const input = document.createElement('input'); input.type = 'radio'; input.name = question.id; input.value = score;
-        input.addEventListener('change', () => { speakerRatings[question.id] = score; sync(); });
+        input.addEventListener('change', () => { speakerRatings[question.id] = score; refreshConditionalQuestions(); sync(); });
         const span = document.createElement('span'); const number = document.createElement('b'); number.textContent = score;
         const caption = document.createElement('small'); caption.textContent = ''; caption.hidden = true;
         span.append(number, caption); label.append(input, span); choices.append(label);
@@ -281,21 +284,22 @@ function renderSpeakerForm(workshops) {
   }
   $('step-back').addEventListener('click', () => { if (!$('step-back').disabled && speakerStep >= 0) { speakerStep--; renderSpeakerStep(true); } });
   $('step-continue').addEventListener('click', () => { if (!$('step-continue').disabled && speakerStep < sections.length) { speakerStep++; renderSpeakerStep(true); } });
+  refreshConditionalQuestions();
   renderSpeakerStep();
 }
 
 function renderSpeakerStep(focus = false) {
   const finalStep = speakerStep === sections.length;
   sections.forEach((section, i) => { section.node.hidden = i !== speakerStep; });
-  $('workshop').parentElement.hidden = speakerStep !== -1;
+  $('workshop').parentElement.hidden = speakerStep !== -1 || surveyRole === 'participant';
   $('participant-name').parentElement.hidden = speakerStep !== -1;
-  $('speaker-name-field').hidden = speakerStep !== -1 || surveyRole === 'speaker';
+  $('speaker-name-field').hidden = speakerStep !== -1 || ['speaker', 'participant'].includes(surveyRole);
   $('final-feedback').hidden = !finalStep;
   $('step-back').hidden = speakerStep < 0;
   $('step-skip').hidden = true;
   $('step-continue').hidden = finalStep;
   $('step-continue').textContent = speakerStep < 0 ? 'Start feedback' : 'Next';
-  $('progress').textContent = speakerStep < 0 ? 'SESSION DETAILS'
+  $('progress').textContent = speakerStep < 0 ? (surveyRole === 'participant' ? 'YOUR DETAILS' : 'SESSION DETAILS')
     : finalStep ? 'OPTIONAL · YOUR OVERALL EXPERIENCE' : `Section ${speakerStep + 1} out of ${sections.length}`;
   status(); sync();
   if (focus) {
