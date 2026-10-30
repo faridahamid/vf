@@ -273,14 +273,14 @@ def test_general_participant_form_is_complete_without_workshop(setup):
     import json, csv, io
     client, db, _ = setup
     questions = main.config.audience_questions('participant')
-    assert len(questions) == 14
-    assert len({q['section'] for q in questions}) == 4
+    assert len(questions) == 5
+    assert len({q['section'] for q in questions}) == 1
     scores = {q['id']: ('Written feedback' if q.get('type') == 'paragraph' else q['options'][-1] if 'options' in q else 4) for q in questions}
     for q in questions:
         if q.get('condition') and scores.get(q['condition']['id']) != q['condition']['value']:
             scores[q['id']] = None
     data = dict(question_id='participant_form', ratings=json.dumps(scores), feedback_text='')
-    bad = {**scores, 'participant_highlight': '   '}
+    bad = {**scores, 'experience': None}
     assert send(client, **{**data, 'ratings': json.dumps(bad)}).status_code == 400
     assert send(client, **data).status_code == 200
     assert len(db.rows) == 1 and db.rows[0]['rating'] == 4
@@ -288,8 +288,8 @@ def test_general_participant_form_is_complete_without_workshop(setup):
     assert summary['scores'] == scores and summary['average_rating'] == 4
     exported = client.get('/api/admin/export?audience=participant', headers={'X-Admin-Password':'test-admin'}).text
     table = list(csv.DictReader(io.StringIO(exported.lstrip('\ufeff'))))
-    assert table[0]['What did you enjoy most about the event?'] == 'Written feedback'
-    assert table[0]['How helpful were the organizers when you needed assistance?'] == ''
+    assert table[0]['How was your experience of the VIP talk?'] == ''
+    assert table[0]['How was your workshop experience?'] == ''
 
 
 @pytest.mark.parametrize('attended', ['Yes', 'No'])

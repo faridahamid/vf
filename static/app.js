@@ -289,6 +289,18 @@ function renderSpeakerForm(workshops) {
 }
 
 function renderSpeakerStep(focus = false) {
+  if (surveyRole === 'participant') {
+    speakerStep = sections.length;
+    sections.forEach(section => { section.node.hidden = false; section.heading.hidden = true; });
+    $('workshop').parentElement.hidden = true;
+    $('speaker-name-field').hidden = true;
+    $('participant-name').parentElement.hidden = false;
+    $('speaker-navigation').hidden = true;
+    $('final-feedback').hidden = false;
+    $('progress').textContent = 'YOUR FEEDBACK';
+    sync();
+    return;
+  }
   const finalStep = speakerStep === sections.length;
   sections.forEach((section, i) => { section.node.hidden = i !== speakerStep; });
   $('workshop').parentElement.hidden = speakerStep !== -1 || surveyRole === 'participant';

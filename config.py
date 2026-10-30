@@ -411,7 +411,7 @@ SPEAKER_QUESTIONS = BOOTCAMP_QUESTIONS['speaker']
 VOLUNTEER_QUESTIONS = BOOTCAMP_QUESTIONS['volunteer']
 
 
-PARTICIPANT_QUESTIONS = [{'id': 'participant_opening',
+LEGACY_FORM_QUESTIONS["participant"] = [{'id': 'participant_opening',
   'en': 'How satisfied were you with the opening?',
   'section': 'Opening & VIP Talks',
   'required': True,
@@ -487,5 +487,34 @@ PARTICIPANT_QUESTIONS = [{'id': 'participant_opening',
   'section': 'Overall Experience',
   'required': True,
   'type': 'paragraph'}]
+LEGACY_QUESTIONS.update({q["id"]: q["en"] for q in LEGACY_FORM_QUESTIONS["participant"]})
+
+PARTICIPANT_QUESTIONS = [{'id': 'experience',
+  'en': 'How would you rate your overall event experience?',
+  'section': 'Your Experience',
+  'required': True,
+  'rating': True},
+ {'id': 'participant_vip_attended',
+  'en': 'Did you attend the VIP talk?',
+  'section': 'Your Experience',
+  'required': True,
+  'options': ['Yes', 'No']},
+ {'id': 'participant_vip',
+  'en': 'How was your experience of the VIP talk?',
+  'section': 'Your Experience',
+  'required': True,
+  'condition': {'id': 'participant_vip_attended', 'value': 'Yes'},
+  'rating': True},
+ {'id': 'participant_workshops_attended',
+  'en': 'Did you attend any workshops?',
+  'section': 'Your Experience',
+  'required': True,
+  'options': ['Yes', 'No']},
+ {'id': 'participant_workshop_enjoyment',
+  'en': 'How was your workshop experience?',
+  'section': 'Your Experience',
+  'required': True,
+  'condition': {'id': 'participant_workshops_attended', 'value': 'Yes'},
+  'rating': True}]
 AUDIENCES['participant']['questions'] = PARTICIPANT_QUESTIONS
-AUDIENCES['participant']['intro'] = 'Tell us about the opening, VIP talks, organizers, and workshops, and help us improve the overall event experience.'
+AUDIENCES['participant']['intro'] = 'A quick check-in about the event, VIP talk, and workshops. Share your overall experience in your own words if you like.'
