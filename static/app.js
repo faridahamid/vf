@@ -23,7 +23,13 @@ function questionVisible(q) { return !q.condition || speakerRatings[q.condition.
 function refreshConditionalQuestions() { questions.forEach((q, i) => { if (speakerFields[i]) speakerFields[i].hidden = !questionVisible(q); }); }
 function answerComplete(q) { if (!questionVisible(q)) return true; const value = speakerRatings[q.id]; return q.required === false || (q.type === 'paragraph' ? typeof value === 'string' && Boolean(value.trim()) : Boolean(value)); }
 function sectionComplete() { return (sections[speakerStep]?.questions || []).every(answerComplete); }
-function ratingsComplete() { return speakerForm ? (surveyRole === 'participant' || Boolean($('workshop').value)) && questions.every(answerComplete) : Boolean(rating); }
+function onePageForm() { return ['participant', 'mentor', 'mentor_feedback'].includes(surveyRole); }
+function ratingsComplete() {
+  if (!speakerForm) return Boolean(rating);
+  if (!onePageForm() && !$('workshop').value) return false;
+  if (surveyRole === 'mentor_feedback' && !$('mentor-name').value.trim()) return false;
+  return questions.every(answerComplete);
+}
 let busy = false, requesting = false, ready = false, maxSeconds = 90, recordFailed = false, rating = 0, micReady = false, maxAudioBytes = 4_000_000;
 const ratingInputs = [...document.querySelectorAll('input[name="rating"]')];
 const formatTime = seconds => `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
@@ -42,11 +48,12 @@ function sync() {
   ratingInputs.forEach(input => input.disabled = busy || Boolean(submissionID));
   if (speakerForm) {
     $('workshop').disabled = busy || Boolean(submissionID);
+    $('mentor-name').disabled = busy || Boolean(submissionID);
     $('step-back').disabled = busy || transcribing || requesting || active || paragraphActive || Boolean(submissionID);
     $('step-continue').disabled = busy || transcribing || requesting || active || paragraphActive || Boolean(submissionID) || (speakerStep === -1
       ? !$('participant-name').value.trim() || (surveyRole !== 'participant' && (!$('workshop').value || (surveyRole !== 'speaker' && !$('speaker-name').value.trim())))
       : !sectionComplete());
-    document.querySelectorAll('#speaker-questions input').forEach(input => input.disabled = busy || Boolean(submissionID));
+    document.querySelectorAll('#speaker-questions input, #speaker-questions select').forEach(input => input.disabled = busy || Boolean(submissionID));
   }
   $('redo').disabled = busy || transcribing || Boolean(submissionID);
   $('feedback-text').disabled = busy || transcribing || Boolean(submissionID);
@@ -175,9 +182,10 @@ async function sendRecording() {
   const form = new FormData();
   for (const [key, value] of Object.entries({token, question_id: speakerForm ? surveyRole + '_form' : questions[index].id, submission_id: submissionID, participant_name: $('participant-name').value.trim(), rating, feedback_text: $('feedback-text').value.trim(), consent: 'true'})) form.append(key, value);
   if (speakerForm) {
-    form.set('rating', String(speakerRatings[({participant: 'experience', speaker: 'speaker_experience', volunteer: 'volunteer_delivery', attendee: 'attendee_experience'})[surveyRole]]));
+    form.set('rating', String(speakerRatings[({participant: 'experience', speaker: 'speaker_experience', volunteer: 'volunteer_delivery', attendee: 'attendee_experience', mentor: 'mentor_experience', mentor_feedback: 'mentor_feedback_helpfulness'})[surveyRole]]));
     form.append('workshop', $('workshop').value);
     form.append('speaker_name', $('speaker-name').value.trim());
+    if (surveyRole === 'mentor_feedback') form.append('mentor_name', $('mentor-name').value.trim());
     form.append('ratings', JSON.stringify(Object.fromEntries(questions.map(q => [q.id, questionVisible(q) ? speakerRatings[q.id] ?? null : null]))));
   }
   try {
@@ -228,9 +236,16 @@ window.addEventListener('pagehide', releaseMic);
     questions = result.questions; maxSeconds = result.max_seconds || 90;
     maxAudioBytes = result.max_audio_bytes || 4_000_000;
     surveyRole = result.audience;
-    speakerForm = ['speaker', 'volunteer', 'attendee'].includes(surveyRole) || (surveyRole === 'participant' && questions.some(q => q.section));
+    speakerForm = ['speaker', 'volunteer', 'attendee'].includes(surveyRole) || (onePageForm() && questions.some(q => q.section));
     if (speakerForm) {
       renderSpeakerForm(result.workshops || []);
+      if (surveyRole === 'mentor_feedback') {
+        $('feedback-label').textContent = 'What worked well, or what could your mentor improve?';
+        $('mentor-name').addEventListener('input', sync);
+      }
+      if (surveyRole === 'mentor') {
+        $('feedback-label').textContent = 'What would make mentoring easier next time?';
+      }
       if (surveyRole === 'volunteer') {
         $('feedback-text').placeholder = 'Share other observations, excessive self-promotion, or suggestions for improvement…';
       }
@@ -268,6 +283,23 @@ function renderSpeakerForm(workshops) {
     if (question.help) { const hint = document.createElement('p'); hint.className = 'language-note'; hint.textContent = question.help; field.append(hint); }
     if (question.type === 'paragraph') {
       createParagraph(field, question);
+    } else if (question.type === 'select') {
+      const select = document.createElement('select');
+      select.setAttribute('aria-label', question.en);
+      select.required = question.required !== false;
+      for (const value of ['', ...question.options]) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value || 'Choose a track';
+        select.append(option);
+      }
+      select.addEventListener('change', () => {
+        speakerRatings[question.id] = select.value;
+        refreshConditionalQuestions();
+        sync();
+      });
+      field.classList.add('name-field');
+      field.append(select);
     } else {
       const choices = document.createElement('div'); choices.className = question.options ? 'survey-choices' : 'rating-options';
       for (const score of question.options || [1, 2, 3, 4, 5]) {
@@ -289,11 +321,12 @@ function renderSpeakerForm(workshops) {
 }
 
 function renderSpeakerStep(focus = false) {
-  if (surveyRole === 'participant') {
+  if (onePageForm()) {
     speakerStep = sections.length;
     sections.forEach(section => { section.node.hidden = false; section.heading.hidden = true; });
     $('workshop').parentElement.hidden = true;
     $('speaker-name-field').hidden = true;
+    $('mentor-name-field').hidden = surveyRole !== 'mentor_feedback';
     $('participant-name').parentElement.hidden = false;
     $('speaker-navigation').hidden = true;
     $('final-feedback').hidden = false;

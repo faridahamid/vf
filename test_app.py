@@ -176,7 +176,8 @@ def test_admin_links_and_filtered_export(setup):
     assert client.get('/api/admin/links').status_code == 401
     headers={'X-Admin-Password':'test-admin'}
     links=client.get('/api/admin/links',headers=headers).json()
-    assert len(links)==6 and len({x['path'] for x in links})==6
+    assert {x['audience'] for x in links} == set(main.config.AUDIENCES)
+    assert len({x['path'] for x in links}) == len(links)
     assert links[0]['path']=='/?t=test-token'
     send(client, participant_name='Participant Example')
     for i in range(102):

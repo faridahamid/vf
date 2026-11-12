@@ -26,8 +26,8 @@ function draw() {
     const time = cell(row, new Date(item.created_at).toLocaleString());
     cell(row, item.participant_name || 'Not provided').dir = 'auto';
     cell(row, item.ptype || 'participant');
-    cell(row, item.question_id === 'participant_form' ? 'General participant feedback' : item.question_id === 'attendee_form' ? 'Workshop attendee feedback' : item.question_id === 'speaker_form' ? 'Speaker feedback form' : item.question_id === 'volunteer_form' ? 'Volunteer session evaluation' : item.question_id);
-    cell(row, item.workshop || '—');
+    cell(row, item.question_id === 'participant_form' ? 'General participant feedback' : item.question_id === 'attendee_form' ? 'Workshop attendee feedback' : item.question_id === 'speaker_form' ? 'Speaker feedback form' : item.question_id === 'volunteer_form' ? 'Volunteer session evaluation' : item.question_id === 'mentor_feedback_form' ? 'Participant feedback on mentors' : item.question_id === 'mentor_form' ? 'Mentoring experience feedback' : item.question_id);
+    cell(row, item.mentor_name || item.workshop || '—');
     const labels = {speaker_experience:'Overall experience', speaker_support:'Organizer support', speaker_communication:'Communication', speaker_session_reception:'Session reception', speaker_future_engagement:'Likelihood to return'};
     cell(row, Object.entries(item.scores || {}).map(([id, value]) => `${item.score_labels?.[id] || labels[id] || id}: ${value == null ? 'Skipped' : typeof value === 'number' ? value + '/5' : value}`).join(' · ') || '—');
     cell(row, item.average_rating != null ? `${Number(item.average_rating).toFixed(1)} / 5 (average)` : item.rating == null ? '—' : `${item.rating} / 5 (single)`);

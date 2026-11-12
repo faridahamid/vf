@@ -518,3 +518,51 @@ PARTICIPANT_QUESTIONS = [{'id': 'experience',
   'rating': True}]
 AUDIENCES['participant']['questions'] = PARTICIPANT_QUESTIONS
 AUDIENCES['participant']['intro'] = 'A quick check-in about the event, VIP talk, and workshops. Share your overall experience in your own words if you like.'
+
+
+MENTOR_TRACKS = [
+    "3D Modeling / Animation",
+    "AI & ML",
+    "AI & ML - Data Science",
+    "AR/VR",
+    "Art & Visualization",
+    "Data Science & Analytics",
+    "Game Development",
+    "General",
+    "GIS / Remote Sensing",
+    "Mobile App Development",
+    "Mobile Dev. & UI & UX Design",
+    "Software Engineering",
+    "Storytelling",
+    "Storytelling - Video Editing",
+    "UI & UX Design",
+    "Web Development",
+]
+
+MENTOR_FEEDBACK_QUESTIONS = [
+    {"id": "mentor_feedback_track", "en": "Which track did this mentor help you with?",
+     "section": "Mentor feedback", "type": "select", "options": MENTOR_TRACKS, "required": True},
+    {"id": "mentor_feedback_helpfulness", "en": "How helpful was this mentor to your team?",
+     "section": "Mentor feedback", "rating": True, "required": True},
+    {"id": "mentor_feedback_clarity", "en": "How clear and actionable was their advice?",
+     "section": "Mentor feedback", "rating": True, "required": True},
+    {"id": "mentor_feedback_approachability", "en": "How comfortable did you feel asking them for help?",
+     "section": "Mentor feedback", "rating": True, "required": True},
+]
+AUDIENCES["mentor_feedback"] = {
+    "label": "Participant feedback on mentors",
+    "intro": "Tell us about one mentor who worked with your team. If you worked with more than one, you can send separate feedback for each.",
+    "question": MENTOR_FEEDBACK_QUESTIONS[1],
+    "questions": MENTOR_FEEDBACK_QUESTIONS,
+}
+
+
+AUDIENCES["mentor"]["questions"] = [
+    {**AUDIENCES["mentor"]["question"], "section": "Mentoring experience", "required": True},
+    {"id": "mentor_organizer_support", "en": "How helpful was the support you received from the organizers?",
+     "section": "Mentoring experience", "rating": True, "required": True},
+    {"id": "mentor_time", "en": "How well did the time available meet your teams' mentoring needs?",
+     "section": "Mentoring experience", "rating": True, "required": True},
+    {"id": "mentor_return", "en": "Would you mentor again at a future NASA Space Apps Cairo event?",
+     "section": "Mentoring experience", "options": ["Yes", "Maybe", "No"], "required": True},
+]

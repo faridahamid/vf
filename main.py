@@ -223,11 +223,30 @@ def preview_transcription(request: Request, token: str = Form(...), audio: Uploa
         audio.file.close()
 
 
+FORM_RATINGS = {
+    "participant": "experience",
+    "speaker": "speaker_experience",
+    "volunteer": "volunteer_delivery",
+    "attendee": "attendee_experience",
+    "mentor": "mentor_experience",
+    "mentor_feedback": "mentor_feedback_helpfulness",
+}
+FORM_TITLES = {
+    "participant_form": "General participant feedback",
+    "speaker_form": "Speaker feedback form",
+    "volunteer_form": "Volunteer session evaluation",
+    "attendee_form": "Workshop attendee feedback",
+    "mentor_form": "Mentoring experience feedback",
+    "mentor_feedback_form": "Participant feedback on mentors",
+}
+WORKSHOP_FORMS = ("speaker", "volunteer", "attendee")
+
+
 @app.post("/api/answer")
 def answer(request: Request, token: str = Form(...), question_id: str = Form(...),
            submission_id: UUID = Form(...), participant_name: str = Form(...),
            rating: int | None = Form(None), consent: bool = Form(False),
-           feedback_text: str = Form(""), workshop: str = Form(""), ratings: str = Form(""), speaker_name: str = Form(""), audio: UploadFile | None = File(None)):
+           feedback_text: str = Form(""), workshop: str = Form(""), ratings: str = Form(""), speaker_name: str = Form(""), mentor_name: str = Form(""), audio: UploadFile | None = File(None)):
     role = resolve_audience(token)
     if not consent:
         raise HTTPException(400, "Please agree to share your feedback.")
@@ -236,7 +255,7 @@ def answer(request: Request, token: str = Form(...), question_id: str = Form(...
         raise HTTPException(409, "This page is outdated. Refresh to review your transcript before sending. Audio is no longer saved.")
     survey = None
     if ratings:
-        if role not in ("participant", "speaker", "volunteer", "attendee") or question_id != role + "_form":
+        if role not in FORM_RATINGS or question_id != role + "_form":
             raise HTTPException(400, "Unknown feedback form.")
         try:
             scores = json.loads(ratings)
@@ -263,14 +282,22 @@ def answer(request: Request, token: str = Form(...), question_id: str = Form(...
                 valid = type(value) is int and 1 <= value <= 5
             if not valid:
                 raise HTTPException(400, "Please answer every required question. Paragraph answers cannot be blank.")
-        if role != "participant" and workshop not in config.WORKSHOPS:
+        if role in WORKSHOP_FORMS and workshop not in config.WORKSHOPS:
             raise HTTPException(400, "Please select a workshop.")
-        rating = scores[{"participant": "experience", "speaker": "speaker_experience", "volunteer": "volunteer_delivery", "attendee": "attendee_experience"}[role]]
+        rating = scores[FORM_RATINGS[role]]
         speaker_name = speaker_name.strip()
-        if role not in ("participant", "speaker") and (not speaker_name or len(speaker_name) > 120):
+        if role in ("volunteer", "attendee") and (not speaker_name or len(speaker_name) > 120):
             raise HTTPException(400, "Please enter the speaker name (up to 120 characters).")
         survey = {"kind": role + "_form", "workshop": workshop, "ratings": scores, "speaker_name": speaker_name}
-    if not survey and question_id not in {q["id"] for q in config.audience_questions(role)}:
+        if role == "mentor_feedback":
+            mentor_name = mentor_name.strip()
+            if not mentor_name or len(mentor_name) > 120:
+                raise HTTPException(400, "Please enter the mentor name (up to 120 characters).")
+            survey.update(mentor_name=mentor_name, workshop="", speaker_name="")
+    if role == "mentor_feedback" and survey is None:
+        raise HTTPException(400, "Please complete the mentor feedback form.")
+    single_questions = [config.AUDIENCES[role]["question"]] if role == "mentor" else config.audience_questions(role)
+    if not survey and question_id not in {q["id"] for q in single_questions}:
         raise HTTPException(400, "Unknown question. Refresh the page and try again.")
     if rating is None or not 1 <= rating <= 5:
         raise HTTPException(400, "Please choose a rating from 1 to 5.")
@@ -368,9 +395,10 @@ VOLUNTEER_SCORE_LABELS = {q["id"]: q["en"] for q in config.VOLUNTEER_QUESTIONS}
 
 def feedback_summary(row):
     summary = {"workshop": "", "average_rating": None, "scores": {}, "score_labels": {}}
-    role = {"participant_form": "participant", "speaker_form": "speaker", "volunteer_form": "volunteer", "attendee_form": "attendee"}.get(row.get("question_id"))
-    if not role:
+    form_id = row.get("question_id")
+    if form_id not in FORM_TITLES:
         return summary
+    role = form_id.removesuffix("_form")
     try:
         survey = json.loads(row.get("transcript_raw") or "{}")
         scores = survey["ratings"]
@@ -398,7 +426,8 @@ def feedback_summary(row):
                 return summary
         labels = {q["id"]: q["en"] for q in form_questions if q["id"] in scores}
         summary.update(workshop=survey.get("workshop", ""), average_rating=round(sum(values) / len(values), 1),
-                       scores={key: scores[key] for key in labels}, score_labels=labels, speaker_name=survey.get("speaker_name", ""))
+                       scores={key: scores[key] for key in labels}, score_labels=labels, speaker_name=survey.get("speaker_name", ""),
+                       mentor_name=survey.get("mentor_name", ""))
     except (ValueError, KeyError, TypeError, AttributeError, ZeroDivisionError):
         pass
     return summary
@@ -415,8 +444,10 @@ def export(request: Request, x_admin_password: str = Header(None), x_admin_passw
     limit("export:" + (request.client.host if request.client else "unknown"), 60)
     check_admin(x_admin_password, x_admin_password_encoding)
     validate_filter(audience)
-    score_columns = [(q["id"], q["en"]) for role in ("participant", "speaker", "volunteer", "attendee") if not audience or audience == role for q in config.audience_questions(role)]
-    columns = [("participant_name", "Name"), ("speaker_name", "Speaker name"), ("workshop", "Workshop"), ("average_rating", "Average rating (1-5)"),
+    score_columns = [(q["id"], q["en"]) for role in FORM_RATINGS if not audience or audience == role for q in config.audience_questions(role)]
+    mentor_columns = [("mentor_name", "Mentor name")] if audience in ("", "mentor_feedback") else []
+    columns = [("participant_name", "Name"), ("speaker_name", "Speaker name"), *mentor_columns,
+               ("workshop", "Workshop"), ("average_rating", "Average rating (1-5)"),
                *score_columns, ("transcript", "Comments"), ("ptype", "Audience"),
                ("created_at", "Received"), ("question", "Question"), ("rating", "Single / overall rating (1-5)"),
                ("id", "Response ID")]
@@ -434,12 +465,10 @@ def export(request: Request, x_admin_password: str = Header(None), x_admin_passw
                 query = query.eq("is_test", False)
             batch = query.range(offset, offset + 999).execute().data
             for row in batch:
-                row["question"] = questions.get(row["question_id"], row["question_id"])
+                row["question"] = FORM_TITLES.get(row["question_id"]) or questions.get(row["question_id"], row["question_id"])
                 summary = feedback_summary(row)
                 row.update(summary)
                 row.update(summary["scores"])
-                if row["question_id"] in ("participant_form", "speaker_form", "volunteer_form", "attendee_form"):
-                    row["question"] = {"participant_form": "General participant feedback", "speaker_form": "Speaker feedback form", "volunteer_form": "Volunteer session evaluation", "attendee_form": "Workshop attendee feedback"}[row["question_id"]]
                 writer.writerow([safe_cell(row.get(key)) for key, _ in columns])
             if len(batch) < 1000:
                 break
